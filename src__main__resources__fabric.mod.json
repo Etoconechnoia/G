@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "tacticalpvphud",
+  "version": "${version}",
+  "name": "TacticalPvPHUD",
+  "description": "Клиентский тактический HUD-ассистент для PvP.",
+  "authors": ["You"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "main": ["com.tacticalpvphud.TacticalPvPHUD"],
+    "client": ["com.tacticalpvphud.client.TacticalPvPHUDClient"]
+  },
+  "mixins": ["tacticalpvphud.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.18.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

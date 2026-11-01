@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "com.tacticalpvphud.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["InGameHudMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

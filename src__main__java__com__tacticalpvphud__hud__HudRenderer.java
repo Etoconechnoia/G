@@ -17,10 +17,14 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
+import net.minecraft.screen.slot.SlotActionType;
+import com.tacticalpvphud.client.gui.RadialScreen;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.MathHelper;
 import org.lwjgl.glfw.GLFW;
 
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
@@ -111,7 +115,7 @@ public class HudRenderer {
 
     // Предметы
     private static final Item[] COUNT_ITEMS = {Items.ENDER_PEARL, Items.TOTEM_OF_UNDYING, Items.GOLDEN_APPLE,
-            Items.ENCHANTED_GOLDEN_APPLE, Items.END_CRYSTAL, Items.SPLASH_POTION, Items.EXPERIENCE_BOTTLE};
+            Items.ENCHANTED_GOLDEN_APPLE, Items.END_CRYSTAL, Items.SPLASH_POTION, Items.EXPERIENCE_BOTTLE, Items.ARROW, Items.RESPAWN_ANCHOR};
     private static final ItemStack[] COUNT_STACKS = new ItemStack[COUNT_ITEMS.length];
     private static final int[] itemCnt = new int[COUNT_ITEMS.length];
     private static final String[] itemStr = new String[COUNT_ITEMS.length];
@@ -131,6 +135,22 @@ public class HudRenderer {
     private static String offText = "";
     private static boolean emptyHand;
     private static final int[] hotColor = new int[9];
+
+    // Новое в 0.5
+    private static int combo = 0, kills = 0;
+    private static long lastHitMs = 0;
+    private static String comboText = "", killsText = "";
+    private static String tgtName = "";
+    private static String ownHpText = "";
+    private static int ownHpColor = 0x55FF55;
+    private static float ownHp = 20f;
+    private static String speedText = "", coordsText = "", fpsText = "", clockText = "", toolText = "";
+    private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static String nearestLine1 = "", nearestLine2 = "";
+    private static long lastDealtMs = 0;
+    private static String biomeText = "";
+    private static final int[] fpsHist = new int[30];
+    private static int fpsIdx = 0;
 
     // Метки, подсказка
     private static final String[] ARROWS = {"↑", "↗", "→", "↘", "↓", "↙", "←", "↖"};
@@ -176,6 +196,7 @@ public class HudRenderer {
 
         handleZoom(mc, c);
         tickBinds(mc, c);
+        tickRadial(mc, c);
         trackDamage(mc, p, now);
 
         // Азимут
@@ -234,6 +255,55 @@ public class HudRenderer {
         if (tickCounter % 5 == 0) updateWaypoints(p, c);
         if (tickCounter % 20 == 0) updatePing(mc, p);
         updateTutorial(p);
+        updateExtras(mc, p, now);
+    }
+
+    private static void updateExtras(MinecraftClient mc, PlayerEntity p, long now) {
+        if (combo > 0 && now - lastHitMs > 3000) combo = 0;
+        comboText = "Комбо x" + combo;
+        killsText = "Убийств: " + kills;
+
+        ownHp = p.getHealth();
+        ownHpText = "HP " + (Math.round(ownHp * 10) / 10f);
+        ownHpColor = ownHp > 14 ? 0x55FF55 : (ownHp > 6 ? 0xFFFF55 : 0xFF5555);
+
+        double vx = p.getVelocity().x, vz = p.getVelocity().z;
+        speedText = "Скорость: " + (Math.round(Math.sqrt(vx * vx + vz * vz) * 200) / 10f) + " б/с";
+        coordsText = p.getBlockX() + " " + p.getBlockY() + " " + p.getBlockZ();
+        fpsText = "FPS: " + mc.getCurrentFps();
+        if (tickCounter % 10 == 0) { fpsHist[fpsIdx] = mc.getCurrentFps(); fpsIdx = (fpsIdx + 1) % fpsHist.length; }
+        if (tickCounter % 20 == 0 && mc.world != null) {
+            biomeText = "Биом: " + mc.world.getBiome(p.getBlockPos()).getKey()
+                    .map(k -> k.getValue().getPath().replace('_', ' ')).orElse("?");
+        }
+        if (tickCounter % 10 == 0) clockText = LocalTime.now().format(CLOCK);
+
+        ItemStack m = p.getMainHandStack();
+        toolText = m.isDamageable() && m.getMaxDamage() > 0
+                ? "Прочность: " + ((m.getMaxDamage() - m.getDamage()) * 100 / m.getMaxDamage()) + "%" : "";
+
+        // Ближайший игрок: направление, дистанция, HP, предмет в руке
+        PlayerEntity best = null;
+        double bd = Double.MAX_VALUE;
+        if (mc.world != null) {
+            for (PlayerEntity o : mc.world.getPlayers()) {
+                if (o == p) continue;
+                double d = p.squaredDistanceTo(o);
+                if (d < bd) { bd = d; best = o; }
+            }
+        }
+        if (best == null) {
+            nearestLine1 = "";
+            nearestLine2 = "";
+        } else {
+            double dx = best.getX() - p.getX(), dz = best.getZ() - p.getZ();
+            float target = (float) Math.toDegrees(Math.atan2(-dx, dz));
+            float rel = MathHelper.wrapDegrees(target - p.getYaw());
+            int idx = ((Math.round(rel / 45f) % 8) + 8) % 8;
+            nearestLine1 = ARROWS[idx] + " " + best.getName().getString() + " " + (int) Math.sqrt(bd) + "м";
+            String held = best.getMainHandStack().isEmpty() ? "пусто" : best.getMainHandStack().getName().getString();
+            nearestLine2 = "HP " + (Math.round(best.getHealth() * 10) / 10f) + " | " + held;
+        }
     }
 
     private static String two(long v) { return v < 10 ? "0" + v : String.valueOf(v); }
@@ -262,6 +332,10 @@ public class HudRenderer {
                 float d = lastTargetHp - thp;
                 dealtTotal += d;
                 addIndicator(d, true, now);
+                combo++;
+                lastHitMs = now;
+                lastDealtMs = now;
+                if (thp <= 0f) kills++;
             }
             lastTargetId = le.getId();
             lastTargetHp = thp;
@@ -284,6 +358,8 @@ public class HudRenderer {
         if (t instanceof LivingEntity le) {
             targetValid = true;
             if (le.getId() != swingTargetId) { swingTargetId = le.getId(); lastSwingStart = 0; prevSwing = 0; }
+            tgtName = le.getName().getString() + "  " + (Math.round(le.getHealth() * 10) / 10f)
+                    + "/" + (Math.round(le.getMaxHealth() * 10) / 10f);
             float d = p.distanceTo(le);
             tgtDist = "Дист: " + (Math.round(d * 10) / 10f);
             tgtDistColor = d <= 3.0f ? 0x55FF55 : (d <= 4.5f ? 0xFFAA00 : 0xFF5555);
@@ -430,9 +506,41 @@ public class HudRenderer {
             if (b.key > 0 && b.key < 400) now[b.key] = GLFW.glfwGetKey(window, b.key) == GLFW.GLFW_PRESS;
         }
         for (TacticalConfig.Bind b : c.binds) {
-            if (b.key > 0 && b.key < 400 && now[b.key] && !KEY_PREV[b.key]) selectItem(mc, b.item);
+            if (b.key > 0 && b.key < 400 && now[b.key] && !KEY_PREV[b.key]) giveItem(mc, b.item);
         }
         System.arraycopy(now, 0, KEY_PREV, 0, 400);
+    }
+
+    private static boolean radialPrev = false;
+
+    /** Открывает круг предметов, пока зажата его клавиша. */
+    private static void tickRadial(MinecraftClient mc, TacticalConfig c) {
+        if (!c.radialEnabled || c.radialKey <= 0 || c.radialKey >= 400) { radialPrev = false; return; }
+        boolean down = GLFW.glfwGetKey(mc.getWindow().getHandle(), c.radialKey) == GLFW.GLFW_PRESS;
+        if (down && !radialPrev && mc.currentScreen == null && !c.radialItems.isEmpty()) {
+            mc.setScreen(new RadialScreen(c.radialKey));
+        }
+        radialPrev = down;
+    }
+
+    /** Берёт предмет в руку: сначала ищет в хотбаре, потом в инвентаре (меняет местами с текущим слотом). */
+    public static void giveItem(MinecraftClient mc, String itemId) {
+        PlayerEntity p = mc.player;
+        if (p == null || mc.interactionManager == null) return;
+        Item item = Registries.ITEM.get(Identifier.of(itemId));
+        for (int i = 0; i < 9; i++) {
+            if (p.getInventory().getStack(i).isOf(item)) {
+                p.getInventory().setSelectedSlot(i);
+                return;
+            }
+        }
+        for (int i = 9; i < 36; i++) {
+            if (p.getInventory().getStack(i).isOf(item)) {
+                int sel = p.getInventory().getSelectedSlot();
+                mc.interactionManager.clickSlot(p.playerScreenHandler.syncId, i, sel, SlotActionType.SWAP, p);
+                return;
+            }
+        }
     }
 
     private static void selectItem(MinecraftClient mc, String itemId) {
@@ -514,6 +622,8 @@ public class HudRenderer {
 
         if (c.reachInfo && targetValid) {
             int x = px(c, HudLayout.TARGET, w), y = py(c, HudLayout.TARGET, h);
+            ctx.drawCenteredTextWithShadow(tr, tgtName, x, y, 0xFFFFFFFF);
+            y += 10;
             ctx.drawCenteredTextWithShadow(tr, tgtDist, x, y, argb(0xFF000000, tgtDistColor));
             if (c.swingTracker) { y += 10; ctx.drawCenteredTextWithShadow(tr, tgtSwing, x, y, 0xFFDDDDDD); }
             if (c.shieldTimer && !tgtShield.isEmpty()) { y += 10; ctx.drawCenteredTextWithShadow(tr, tgtShield, x, y, 0xFFFFAA00); }
@@ -571,6 +681,58 @@ public class HudRenderer {
         if (c.comboTutorial && !tutorialText.isEmpty())
             ctx.drawCenteredTextWithShadow(tr, tutorialText, px(c, HudLayout.TUTORIAL, w), py(c, HudLayout.TUTORIAL, h), 0xFFFFFF55);
 
+        if (c.ownHp)
+            ctx.drawTextWithShadow(tr, ownHpText, px(c, HudLayout.OWNHP, w), py(c, HudLayout.OWNHP, h), argb(0xFF000000, ownHpColor));
+
+        if (c.comboCounter && combo >= 2)
+            ctx.drawCenteredTextWithShadow(tr, comboText, px(c, HudLayout.COMBO, w), py(c, HudLayout.COMBO, h), 0xFFFFAA00);
+
+        if (c.killCounter)
+            ctx.drawTextWithShadow(tr, killsText, px(c, HudLayout.KILLS, w), py(c, HudLayout.KILLS, h), 0xFFFF7777);
+
+        if (c.nearestEnemy && !nearestLine1.isEmpty()) {
+            int x = px(c, HudLayout.NEAREST, w), y = py(c, HudLayout.NEAREST, h);
+            ctx.drawCenteredTextWithShadow(tr, nearestLine1, x, y, 0xFFFFAA55);
+            ctx.drawCenteredTextWithShadow(tr, nearestLine2, x, y + 10, 0xFFCCCCCC);
+        }
+
+        if (c.infoFps || c.infoSpeed || c.infoCoords || c.infoClock || c.toolDurability || c.biomeInfo) {
+            int x = px(c, HudLayout.INFO, w), y = py(c, HudLayout.INFO, h);
+            if (c.infoFps) {
+                ctx.drawTextWithShadow(tr, fpsText, x, y, 0xFFFFFFFF);
+                for (int k = 0; k < fpsHist.length; k++) {
+                    int v = Math.min(8, fpsHist[(fpsIdx + k) % fpsHist.length] / 30);
+                    ctx.fill(x + 56 + k * 2, y + 8 - v, x + 57 + k * 2, y + 8, 0xFF55FF55);
+                }
+                y += 10;
+            }
+            if (c.biomeInfo) { ctx.drawTextWithShadow(tr, biomeText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.infoSpeed) { ctx.drawTextWithShadow(tr, speedText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.infoCoords) { ctx.drawTextWithShadow(tr, coordsText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.infoClock) { ctx.drawTextWithShadow(tr, clockText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.toolDurability && !toolText.isEmpty()) { ctx.drawTextWithShadow(tr, toolText, x, y, 0xFFFFFFFF); }
+        }
+
+        if (c.keystrokes) renderKeys(ctx, mc, c, w, h);
+
+        if (c.inventoryHud) {
+            int bx = px(c, HudLayout.INVENTORY, w), by = py(c, HudLayout.INVENTORY, h);
+            ctx.fill(bx - 2, by - 2, bx + 164, by + 56, 0x66000000);
+            for (int i = 0; i < 27; i++) {
+                ItemStack st = mc.player.getInventory().getStack(9 + i);
+                if (!st.isEmpty()) ctx.drawItem(st, bx + (i % 9) * 18, by + (i / 9) * 18);
+            }
+        }
+
+        if (c.lowHpAlert && ownHp > 0 && ownHp <= 6f) {
+            int al = 40 + (int) (40 * Math.abs(Math.sin(now / 200.0)));
+            int col = (al << 24) | 0xFF0000, b = 6;
+            ctx.fill(0, 0, w, b, col);
+            ctx.fill(0, h - b, w, h, col);
+            ctx.fill(0, 0, b, h, col);
+            ctx.fill(w - b, 0, w, h, col);
+        }
+
         if (c.coloredHotbar) {
             for (int i = 0; i < 9; i++) {
                 if (hotColor[i] == 0) continue;
@@ -580,10 +742,26 @@ public class HudRenderer {
         }
     }
 
+    private static void keyBox(DrawContext ctx, MinecraftClient mc, String label, boolean down, int x, int y, int bw) {
+        ctx.fill(x, y, x + bw, y + 14, down ? 0xAAFFFFFF : 0x66000000);
+        ctx.drawCenteredTextWithShadow(mc.textRenderer, label, x + bw / 2, y + 3, down ? 0xFF000000 : 0xFFFFFFFF);
+    }
+
+    private static void renderKeys(DrawContext ctx, MinecraftClient mc, TacticalConfig c, int w, int h) {
+        int x = px(c, HudLayout.KEYS, w), y = py(c, HudLayout.KEYS, h);
+        keyBox(ctx, mc, "W", mc.options.forwardKey.isPressed(), x + 16, y, 14);
+        keyBox(ctx, mc, "A", mc.options.leftKey.isPressed(), x, y + 16, 14);
+        keyBox(ctx, mc, "S", mc.options.backKey.isPressed(), x + 16, y + 16, 14);
+        keyBox(ctx, mc, "D", mc.options.rightKey.isPressed(), x + 32, y + 16, 14);
+        keyBox(ctx, mc, "ЛКМ", lmbPrev, x, y + 32, 23);
+        keyBox(ctx, mc, "ПКМ", rmbPrev, x + 25, y + 32, 23);
+    }
+
     private static void renderCrosshair(DrawContext ctx, MinecraftClient mc, TacticalConfig c, int w, int h, int a) {
         PlayerEntity p = mc.player;
         int cx = px(c, HudLayout.CROSSHAIR, w), cy = py(c, HudLayout.CROSSHAIR, h);
         int color = argb(0xFF000000, hueToRgb(c.crosshairHue));
+        if (c.hitFlash && System.currentTimeMillis() - lastDealtMs < 150) color = 0xFFFF2222;
 
         if (c.crosshairPixelMode) {
             int s = Math.max(1, Math.round(c.crosshairPixelScale));

@@ -28,7 +28,7 @@ import java.util.function.IntConsumer;
 public class TacticalSettingsScreen extends Screen {
 
     private enum Category {
-        VISUAL("Визуал"), INDICATORS("Индикаторы"), PVP("PvP"), BINDS("Бинды"), MISC("Прочее");
+        VISUAL("Визуал"), INDICATORS("Индикаторы"), PVP("PvP"), BINDS("Бинды"), RADIAL("Круг"), MISC("Прочее");
         final String label;
         Category(String l) { label = l; }
     }
@@ -39,6 +39,8 @@ public class TacticalSettingsScreen extends Screen {
     private Category current = Category.VISUAL;
     private int page = 0;
     private boolean picking = false;
+    private boolean pickingRadial = false;
+    private boolean capturingRadial = false;
     private int capturing = -1;
     private final List<IconDraw> icons = new ArrayList<>();
 
@@ -59,6 +61,8 @@ public class TacticalSettingsScreen extends Screen {
                 current = cat;
                 page = 0;
                 picking = false;
+                pickingRadial = false;
+                capturingRadial = false;
                 capturing = -1;
                 clearAndInit();
             }).dimensions(10, y, 105, 20).build());
@@ -70,6 +74,7 @@ public class TacticalSettingsScreen extends Screen {
             case INDICATORS -> indicatorRows(c);
             case PVP -> pvpRows(c);
             case BINDS -> bindRows(c);
+            case RADIAL -> radialRows(c);
             case MISC -> miscRows(c);
         };
 
@@ -93,6 +98,9 @@ public class TacticalSettingsScreen extends Screen {
     // ===================== категории =====================
     private List<IntConsumer> visualRows(TacticalConfig c) {
         List<IntConsumer> r = new ArrayList<>();
+        r.add(button("Пресет: МИНИМУМ", () -> { c.applyPreset(0); clearAndInit(); }));
+        r.add(button("Пресет: PvP", () -> { c.applyPreset(1); clearAndInit(); }));
+        r.add(button("Пресет: ВСЁ", () -> { c.applyPreset(2); clearAndInit(); }));
         r.add(toggle("Азимут", () -> c.azimuthEnabled, v -> c.azimuthEnabled = v));
         r.add(toggle("Свой прицел", () -> c.customCrosshair, v -> c.customCrosshair = v));
         r.add(toggle("Динамический прицел", () -> c.dynamicCrosshair, v -> c.dynamicCrosshair = v));
@@ -127,6 +135,17 @@ public class TacticalSettingsScreen extends Screen {
         r.add(toggle("Кольца таймеров эффектов", () -> c.potionRings, v -> c.potionRings = v));
         r.add(toggle("Список дебаффов", () -> c.debuffTracker, v -> c.debuffTracker = v));
         r.add(toggle("Пинг + график", () -> c.pingHud, v -> c.pingHud = v));
+        r.add(toggle("Ближайший игрок", () -> c.nearestEnemy, v -> c.nearestEnemy = v));
+        r.add(toggle("Моё HP цифрой", () -> c.ownHp, v -> c.ownHp = v));
+        r.add(toggle("Тревога низкого HP", () -> c.lowHpAlert, v -> c.lowHpAlert = v));
+        r.add(toggle("Прочность предмета в руке", () -> c.toolDurability, v -> c.toolDurability = v));
+        r.add(toggle("FPS", () -> c.infoFps, v -> c.infoFps = v));
+        r.add(toggle("Скорость", () -> c.infoSpeed, v -> c.infoSpeed = v));
+        r.add(toggle("Координаты", () -> c.infoCoords, v -> c.infoCoords = v));
+        r.add(toggle("Часы", () -> c.infoClock, v -> c.infoClock = v));
+        r.add(toggle("Биом", () -> c.biomeInfo, v -> c.biomeInfo = v));
+        r.add(toggle("Инвентарь на экране", () -> c.inventoryHud, v -> c.inventoryHud = v));
+        r.add(toggle("Вспышка прицела при попадании", () -> c.hitFlash, v -> c.hitFlash = v));
         return r;
     }
 
@@ -138,6 +157,9 @@ public class TacticalSettingsScreen extends Screen {
         r.add(toggle("Обмен уроном", () -> c.tradeLogger, v -> c.tradeLogger = v));
         r.add(toggle("Таймер сессии", () -> c.sessionTimer, v -> c.sessionTimer = v));
         r.add(toggle("Подсказки комбо", () -> c.comboTutorial, v -> c.comboTutorial = v));
+        r.add(toggle("Счётчик комбо", () -> c.comboCounter, v -> c.comboCounter = v));
+        r.add(toggle("Счётчик убийств", () -> c.killCounter, v -> c.killCounter = v));
+        r.add(toggle("Клавиши WASD/мышь", () -> c.keystrokes, v -> c.keystrokes = v));
         return r;
     }
 
@@ -175,28 +197,12 @@ public class TacticalSettingsScreen extends Screen {
         List<IntConsumer> r = new ArrayList<>();
 
         if (picking) {
-            r.add(button("Отмена", () -> { picking = false; clearAndInit(); }));
-            for (int row = 0; row < 4; row++) {
-                final int rr = row;
-                r.add(y -> {
-                    if (client == null || client.player == null) return;
-                    for (int col = 0; col < 9; col++) {
-                        int n = rr * 9 + col;
-                        int slot = n < 27 ? 9 + n : n - 27;
-                        ItemStack stack = client.player.getInventory().getStack(slot);
-                        if (stack.isEmpty()) continue;
-                        int x = 130 + col * 24;
-                        icons.add(new IconDraw(stack, x + 2, y + 2));
-                        addDrawableChild(ButtonWidget.builder(Text.empty(), btn -> {
-                            c.binds.add(new TacticalConfig.Bind(Registries.ITEM.getId(stack.getItem()).toString(), -1));
-                            capturing = c.binds.size() - 1;
-                            picking = false;
-                            clearAndInit();
-                        }).dimensions(x, y, 20, 20).build());
-                    }
-                });
-            }
-            return r;
+            return pickerRows(c, () -> { picking = false; clearAndInit(); }, stack -> {
+                c.binds.add(new TacticalConfig.Bind(Registries.ITEM.getId(stack.getItem()).toString(), -1));
+                capturing = c.binds.size() - 1;
+                picking = false;
+                clearAndInit();
+            });
         }
 
         r.add(toggle("Бинды предметов", () -> c.bindsEnabled, v -> c.bindsEnabled = v));
@@ -219,6 +225,63 @@ public class TacticalSettingsScreen extends Screen {
             });
         }
         r.add(button("+ Добавить бинд", () -> { picking = true; capturing = -1; clearAndInit(); }));
+        return r;
+    }
+
+    /** Сетка предметов из инвентаря игрока: клик по предмету вызывает onPick. */
+    private List<IntConsumer> pickerRows(TacticalConfig c, Runnable onCancel, Consumer<ItemStack> onPick) {
+        List<IntConsumer> r = new ArrayList<>();
+        r.add(button("Отмена", onCancel));
+        for (int row = 0; row < 4; row++) {
+            final int rr = row;
+            r.add(y -> {
+                if (client == null || client.player == null) return;
+                for (int col = 0; col < 9; col++) {
+                    int n = rr * 9 + col;
+                    int slot = n < 27 ? 9 + n : n - 27;
+                    ItemStack stack = client.player.getInventory().getStack(slot);
+                    if (stack.isEmpty()) continue;
+                    int x = 130 + col * 24;
+                    icons.add(new IconDraw(stack, x + 2, y + 2));
+                    addDrawableChild(ButtonWidget.builder(Text.empty(), btn -> onPick.accept(stack))
+                            .dimensions(x, y, 20, 20).build());
+                }
+            });
+        }
+        return r;
+    }
+
+    /** Вкладка «Круг»: настройка колеса предметов (до 8 сегментов). */
+    private List<IntConsumer> radialRows(TacticalConfig c) {
+        if (pickingRadial) {
+            return pickerRows(c, () -> { pickingRadial = false; clearAndInit(); }, stack -> {
+                if (c.radialItems.size() < 8) c.radialItems.add(Registries.ITEM.getId(stack.getItem()).toString());
+                pickingRadial = false;
+                clearAndInit();
+            });
+        }
+        List<IntConsumer> r = new ArrayList<>();
+        r.add(toggle("Круг предметов", () -> c.radialEnabled, v -> c.radialEnabled = v));
+        r.add(button("Клавиша круга: " + (capturingRadial ? "нажми клавишу..." : keyName(c.radialKey)), () -> {
+            capturingRadial = true;
+            clearAndInit();
+        }));
+        for (int i = 0; i < c.radialItems.size(); i++) {
+            final int idx = i;
+            Item item = Registries.ITEM.get(Identifier.of(c.radialItems.get(i)));
+            r.add(y -> {
+                icons.add(new IconDraw(new ItemStack(item), 130, y + 2));
+                addDrawableChild(ButtonWidget.builder(Text.literal((idx + 1) + ". " + item.getName().getString()), btn -> {})
+                        .dimensions(152, y, 172, 20).build());
+                addDrawableChild(ButtonWidget.builder(Text.literal("X"), btn -> {
+                    c.radialItems.remove(idx);
+                    clearAndInit();
+                }).dimensions(328, y, 20, 20).build());
+            });
+        }
+        if (c.radialItems.size() < 8) {
+            r.add(button("+ Добавить предмет в круг", () -> { pickingRadial = true; clearAndInit(); }));
+        }
         return r;
     }
 
@@ -257,6 +320,18 @@ public class TacticalSettingsScreen extends Screen {
 
         // Ожидание клавиши для бинда (опрос GLFW). Backspace очищает бинд.
         TacticalConfig c = TacticalConfig.get();
+        if (capturingRadial && client != null) {
+            long win = client.getWindow().getHandle();
+            for (int k = 32; k <= 348; k++) {
+                if (k == GLFW.GLFW_KEY_ESCAPE) continue;
+                if (GLFW.glfwGetKey(win, k) == GLFW.GLFW_PRESS) {
+                    c.radialKey = (k == GLFW.GLFW_KEY_BACKSPACE) ? -1 : k;
+                    capturingRadial = false;
+                    clearAndInit();
+                    break;
+                }
+            }
+        }
         if (capturing >= 0 && capturing < c.binds.size() && client != null) {
             long win = client.getWindow().getHandle();
             for (int k = 32; k <= 348; k++) {

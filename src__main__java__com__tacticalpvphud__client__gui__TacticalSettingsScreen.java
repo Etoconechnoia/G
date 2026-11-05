@@ -146,6 +146,14 @@ public class TacticalSettingsScreen extends Screen {
         r.add(toggle("Биом", () -> c.biomeInfo, v -> c.biomeInfo = v));
         r.add(toggle("Инвентарь на экране", () -> c.inventoryHud, v -> c.inventoryHud = v));
         r.add(toggle("Вспышка прицела при попадании", () -> c.hitFlash, v -> c.hitFlash = v));
+        r.add(toggle("Цель: броня и предмет", () -> c.targetGear, v -> c.targetGear = v));
+        r.add(toggle("Кольцо кулдауна у прицела", () -> c.cooldownRing, v -> c.cooldownRing = v));
+        r.add(toggle("Тревоги (тотем/голод/добивай)", () -> c.alerts, v -> c.alerts = v));
+        r.add(toggle("Прогноз урона от падения", () -> c.fallInfo, v -> c.fallInfo = v));
+        r.add(toggle("Полоса еды / лука", () -> c.useBar, v -> c.useBar = v));
+        r.add(toggle("Состояние (спринт/присед)", () -> c.stateInfo, v -> c.stateInfo = v));
+        r.add(toggle("Игровое время", () -> c.gameTime, v -> c.gameTime = v));
+        r.add(toggle("Игроков рядом", () -> c.playersNear, v -> c.playersNear = v));
         return r;
     }
 
@@ -160,11 +168,22 @@ public class TacticalSettingsScreen extends Screen {
         r.add(toggle("Счётчик комбо", () -> c.comboCounter, v -> c.comboCounter = v));
         r.add(toggle("Счётчик убийств", () -> c.killCounter, v -> c.killCounter = v));
         r.add(toggle("Клавиши WASD/мышь", () -> c.keystrokes, v -> c.keystrokes = v));
+        r.add(toggle("DPS", () -> c.dpsMeter, v -> c.dpsMeter = v));
+        r.add(toggle("Статистика (точность, К/Д)", () -> c.statsPanel, v -> c.statsPanel = v));
+        r.add(toggle("Лента убийств", () -> c.killFeed, v -> c.killFeed = v));
         return r;
     }
 
     private List<IntConsumer> miscRows(TacticalConfig c) {
         List<IntConsumer> r = new ArrayList<>();
+        r.add(toggle("Мини-карта", () -> c.minimapEnabled, v -> c.minimapEnabled = v));
+        r.add(toggle("Карта вращается", () -> c.minimapRotate, v -> c.minimapRotate = v));
+        r.add(toggle("Игроки на карте", () -> c.minimapPlayers, v -> c.minimapPlayers = v));
+        r.add(toggle("Метки на карте", () -> c.minimapWaypoints, v -> c.minimapWaypoints = v));
+        r.add(toggle("Предсказание движения", () -> c.minimapPredict, v -> c.minimapPredict = v));
+        r.add(slider("Секунд вперёд (1-5)", 1, 5, () -> c.predictSeconds, v -> c.predictSeconds = (float) v));
+        r.add(slider("Размер клетки (px)", 1, 4, () -> c.minimapScale, v -> c.minimapScale = (float) v));
+        r.add(slider("Радиус карты (блоки)", 12, 64, () -> c.minimapRange, v -> c.minimapRange = (float) v));
         r.add(toggle("Зум (клавиша C)", () -> c.zoomEnabled, v -> c.zoomEnabled = v));
         r.add(slider("Сила зума (FOV)", 30, 90, () -> c.zoomFov, v -> c.zoomFov = (float) v));
         r.add(toggle("Фильтр чата", () -> c.chatFilter, v -> c.chatFilter = v));

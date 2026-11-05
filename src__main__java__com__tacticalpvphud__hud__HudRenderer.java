@@ -2,6 +2,7 @@ package com.tacticalpvphud.hud;
 
 import com.tacticalpvphud.client.TacticalPvPHUDClient;
 import com.tacticalpvphud.config.TacticalConfig;
+import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.PlayerListEntry;
@@ -20,7 +21,9 @@ import net.minecraft.registry.Registries;
 import net.minecraft.screen.slot.SlotActionType;
 import com.tacticalpvphud.client.gui.RadialScreen;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.world.Heightmap;
 import org.lwjgl.glfw.GLFW;
 
 import java.time.LocalTime;
@@ -147,7 +150,28 @@ public class HudRenderer {
     private static String speedText = "", coordsText = "", fpsText = "", clockText = "", toolText = "";
     private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static String nearestLine1 = "", nearestLine2 = "";
+    // ---- мини-карта ----
+    private static final int GRID = 31;
+    private static final int[] mapColors = new int[GRID * GRID];
+    private static final BlockPos.Mutable MPOS = new BlockPos.Mutable();
+    private static final int MAXMARK = 24;
+    private static final int[] markX = new int[MAXMARK], markY = new int[MAXMARK], markType = new int[MAXMARK];
+    private static int markCount, predX, predY, offX, offY;
+    private static boolean predOk;
+    private static String predText = "";
+
     private static long lastDealtMs = 0;
+    private static final String[] DIRS = {"С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"};
+    private static int deaths, streak, maxCombo, swings, hitsLanded, totemsUsed, lastTotemTotal = -1;
+    private static final float[] dpsAmt = new float[32];
+    private static final long[] dpsT = new long[32];
+    private static int dpsHead = 0;
+    private static String dpsText = "", statsLine1 = "", statsLine2 = "", fallText = "", alertText = "",
+            killFeedText = "", tgtGear = "", stateText = "", gameTimeText = "", playersNearText = "";
+    private static long killFeedUntil = 0;
+    private static boolean fallDanger, tgtLow, useBarActive;
+    private static float useFrac;
+    private static int alertColor = 0xFFFF5555;
     private static String biomeText = "";
     private static final int[] fpsHist = new int[30];
     private static int fpsIdx = 0;
@@ -179,6 +203,7 @@ public class HudRenderer {
         Entity t = mc.targetedEntity;
         if (lmb && !lmbPrev && mc.currentScreen == null) {
             LMB.add(now);
+            swings++;
             lastAttackMs = now;
             if (t instanceof LivingEntity le) {
                 markCombat(now);
@@ -201,7 +226,7 @@ public class HudRenderer {
 
         // Азимут
         float az = ((p.getYaw() + 180f) % 360f + 360f) % 360f;
-        azText = Math.round(az) + "°";
+        azText = DIRS[(int) ((az + 22.5f) / 45f) % 8] + " " + Math.round(az) + "°";
 
         // Бой
         combatActive = now - lastCombatMs <= COMBAT_TIMEOUT_MS && lastCombatMs != 0;
@@ -256,6 +281,7 @@ public class HudRenderer {
         if (tickCounter % 20 == 0) updatePing(mc, p);
         updateTutorial(p);
         updateExtras(mc, p, now);
+        if (c.minimapEnabled && tickCounter % 4 == 0) updateMinimap(mc, p, c);
     }
 
     private static void updateExtras(MinecraftClient mc, PlayerEntity p, long now) {
@@ -284,14 +310,17 @@ public class HudRenderer {
 
         // Ближайший игрок: направление, дистанция, HP, предмет в руке
         PlayerEntity best = null;
+        int near = 0;
         double bd = Double.MAX_VALUE;
         if (mc.world != null) {
             for (PlayerEntity o : mc.world.getPlayers()) {
                 if (o == p) continue;
                 double d = p.squaredDistanceTo(o);
+                if (d < 900) near++;
                 if (d < bd) { bd = d; best = o; }
             }
         }
+        playersNearText = "Игроков рядом: " + near;
         if (best == null) {
             nearestLine1 = "";
             nearestLine2 = "";
@@ -303,6 +332,174 @@ public class HudRenderer {
             nearestLine1 = ARROWS[idx] + " " + best.getName().getString() + " " + (int) Math.sqrt(bd) + "м";
             String held = best.getMainHandStack().isEmpty() ? "пусто" : best.getMainHandStack().getName().getString();
             nearestLine2 = "HP " + (Math.round(best.getHealth() * 10) / 10f) + " | " + held;
+        }
+
+        // DPS за 5 секунд
+        float sum = 0;
+        for (int i = 0; i < dpsAmt.length; i++) if (now - dpsT[i] <= 5000) sum += dpsAmt[i];
+        dpsText = "DPS: " + (Math.round(sum / 5f * 10) / 10f);
+
+        // Статистика
+        int acc = swings > 0 ? Math.min(100, hitsLanded * 100 / swings) : 0;
+        statsLine1 = "Точность " + acc + "% | макс. комбо " + maxCombo;
+        statsLine2 = "К/Д " + kills + "/" + deaths + " | серия " + streak + " | тотемов " + totemsUsed;
+
+        // Прогноз урона от падения
+        if (p.fallDistance > 3 && !p.isOnGround() && !p.isTouchingWater()) {
+            int dmg = (int) Math.ceil(p.fallDistance - 3);
+            fallText = "Падение: " + (int) p.fallDistance + " бл. (урон ~" + dmg + ")";
+            fallDanger = dmg >= ownHp;
+        } else {
+            fallText = "";
+        }
+
+        // Тревоги
+        alertText = "";
+        if (combatActive && !p.getOffHandStack().isOf(Items.TOTEM_OF_UNDYING)) {
+            alertText = itemCnt[1] > 0 ? "ТОТЕМ НЕ В РУКЕ" : "НЕТ ТОТЕМОВ";
+            alertColor = 0xFFFF5555;
+        } else if (lastFood >= 0 && lastFood <= 6) {
+            alertText = "ГОЛОД";
+            alertColor = 0xFFFFAA33;
+        } else if (tgtLow && targetValid) {
+            alertText = "ДОБИВАЙ!";
+            alertColor = 0xFF55FF55;
+        }
+
+        // Использование предмета (еда, лук)
+        useBarActive = false;
+        if (p.isUsingItem()) {
+            ItemStack act = p.getActiveItem();
+            int max = act.getMaxUseTime(p);
+            if (max > 0) {
+                useFrac = 1f - p.getItemUseTimeLeft() / (float) max;
+                useBarActive = true;
+            }
+        }
+
+        // Состояние, игровое время
+        stateText = p.isSprinting() ? "Спринт" : (p.isSneaking() ? "Присед" : (p.isSwimming() ? "Плывёт" : "Ходьба"));
+        if (tickCounter % 5 == 0 && mc.world != null) {
+            long t = mc.world.getTimeOfDay() % 24000;
+            gameTimeText = "Игровое время " + two((t / 1000 + 6) % 24) + ":" + two((t % 1000) * 60 / 1000);
+        }
+    }
+
+    /** Перевод смещения в мире в пиксели карты (offX/offY). */
+    private static void toMap(double dx, double dz, double fx, double fz, double rx, double rz, double step, int cell) {
+        double sx = (dx * rx + dz * rz) / step;
+        double fy = (dx * fx + dz * fz) / step;
+        offX = (int) Math.round(sx * cell);
+        offY = (int) Math.round(-fy * cell);
+    }
+
+    /** Обновляет цвета клеток карты (5 раз в секунду) и метки: игроки, метки, предсказание. */
+    private static void updateMinimap(MinecraftClient mc, PlayerEntity p, TacticalConfig c) {
+        if (mc.world == null) return;
+        double yaw = Math.toRadians(p.getYaw());
+        double fx = -Math.sin(yaw), fz = Math.cos(yaw);   // вперёд
+        double rx = -Math.cos(yaw), rz = -Math.sin(yaw);  // вправо
+        if (!c.minimapRotate) { fx = 0; fz = -1; rx = 1; rz = 0; } // север вверху
+        double step = c.minimapRange * 2.0 / GRID;
+        int cell = Math.max(1, Math.round(c.minimapScale));
+        int half = GRID * cell / 2;
+        double bx = p.getX(), bz = p.getZ();
+        int py = p.getBlockY();
+        var cm = mc.world.getChunkManager();
+
+        for (int gz = 0; gz < GRID; gz++) {
+            for (int gx = 0; gx < GRID; gx++) {
+                double sx = gx - GRID / 2, sy = gz - GRID / 2;
+                int wx = (int) Math.floor(bx + (rx * sx - fx * sy) * step);
+                int wz = (int) Math.floor(bz + (rz * sx - fz * sy) * step);
+                int idx = gz * GRID + gx;
+                if (!cm.isChunkLoaded(wx >> 4, wz >> 4)) { mapColors[idx] = 0x222222; continue; }
+                int y = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, wx, wz) - 1;
+                MPOS.set(wx, y, wz);
+                BlockState st = mc.world.getBlockState(MPOS);
+                int col = st.getMapColor(mc.world, MPOS).color;
+                float shade = 1f + MathHelper.clamp((y - py) / 24f, -0.4f, 0.4f);
+                int cr = Math.min(255, (int) (((col >> 16) & 255) * shade));
+                int cg = Math.min(255, (int) (((col >> 8) & 255) * shade));
+                int cb = Math.min(255, (int) ((col & 255) * shade));
+                mapColors[idx] = (cr << 16) | (cg << 8) | cb;
+            }
+        }
+
+        markCount = 0;
+        if (c.minimapPlayers) {
+            for (PlayerEntity o : mc.world.getPlayers()) {
+                if (o == p || markCount >= MAXMARK) continue;
+                toMap(o.getX() - bx, o.getZ() - bz, fx, fz, rx, rz, step, cell);
+                if (Math.abs(offX) <= half && Math.abs(offY) <= half) {
+                    markX[markCount] = offX; markY[markCount] = offY; markType[markCount] = 0; markCount++;
+                }
+            }
+        }
+        if (c.minimapWaypoints) {
+            for (TacticalConfig.Waypoint wp : c.waypoints) {
+                if (markCount >= MAXMARK) break;
+                toMap(wp.x + 0.5 - bx, wp.z + 0.5 - bz, fx, fz, rx, rz, step, cell);
+                if (Math.abs(offX) <= half && Math.abs(offY) <= half) {
+                    markX[markCount] = offX; markY[markCount] = offY; markType[markCount] = 1; markCount++;
+                }
+            }
+        }
+
+        // Предсказание движения: где окажешься через N секунд, если скорость не изменится
+        double t = MathHelper.clamp(c.predictSeconds, 1f, 5f);
+        double vx = p.getVelocity().x * 20 * t, vz = p.getVelocity().z * 20 * t;
+        double dist = Math.sqrt(vx * vx + vz * vz);
+        predOk = dist > 0.6 * t;
+        if (predOk) {
+            toMap(vx, vz, fx, fz, rx, rz, step, cell);
+            int m = Math.max(Math.abs(offX), Math.abs(offY));
+            if (m > half - 2) {
+                double k = (half - 2) / (double) m;
+                offX = (int) (offX * k);
+                offY = (int) (offY * k);
+            }
+            predX = offX;
+            predY = offY;
+            predText = "Через " + Math.round(t) + " с: " + (int) dist + " бл.";
+        }
+    }
+
+    private static void renderMinimap(DrawContext ctx, MinecraftClient mc, TacticalConfig c, int w, int h) {
+        int cell = Math.max(1, Math.round(c.minimapScale));
+        int size = GRID * cell;
+        int x0 = px(c, HudLayout.MINIMAP, w), y0 = py(c, HudLayout.MINIMAP, h);
+        ctx.fill(x0 - 1, y0 - 1, x0 + size + 1, y0 + size + 1, 0xFF000000);
+        for (int gz = 0; gz < GRID; gz++) {
+            for (int gx = 0; gx < GRID; gx++) {
+                int x = x0 + gx * cell, y = y0 + gz * cell;
+                ctx.fill(x, y, x + cell, y + cell, 0xFF000000 | mapColors[gz * GRID + gx]);
+            }
+        }
+        int cx = x0 + size / 2, cy = y0 + size / 2;
+
+        for (int i = 0; i < markCount; i++) {
+            int mx = cx + markX[i], my = cy + markY[i];
+            ctx.fill(mx - 1, my - 1, mx + 2, my + 2, markType[i] == 0 ? 0xFFFF3333 : 0xFF33FFFF);
+        }
+
+        if (c.minimapPredict && predOk) {
+            for (int k = 1; k <= 5; k++) {
+                int ix = cx + predX * k / 6, iy = cy + predY * k / 6;
+                ctx.fill(ix, iy, ix + 2, iy + 2, 0xFFFFDD00);
+            }
+            ctx.fill(cx + predX - 1, cy + predY - 1, cx + predX + 2, cy + predY + 2, 0xFFFFDD00);
+            ctx.drawTextWithShadow(mc.textRenderer, predText, x0, y0 + size + 3, 0xFFFFDD55);
+        }
+
+        // Игрок и направление взгляда
+        ctx.fill(cx - 1, cy - 1, cx + 2, cy + 2, 0xFFFFFFFF);
+        if (c.minimapRotate) {
+            ctx.fill(cx, cy - 5, cx + 1, cy - 1, 0xFFFFFF55);
+        } else {
+            double yr = Math.toRadians(mc.player.getYaw());
+            int hx = cx + (int) Math.round(-Math.sin(yr) * 5), hy = cy + (int) Math.round(Math.cos(yr) * 5);
+            ctx.fill(hx, hy, hx + 2, hy + 2, 0xFFFFFF55);
         }
     }
 
@@ -322,6 +519,7 @@ public class HudRenderer {
             addIndicator(d, false, now);
             markCombat(now);
         }
+        if (hp <= 0f && lastHp > 0f) { deaths++; streak = 0; }
         lastHp = hp;
 
         Entity t = mc.targetedEntity;
@@ -333,9 +531,19 @@ public class HudRenderer {
                 dealtTotal += d;
                 addIndicator(d, true, now);
                 combo++;
+                if (combo > maxCombo) maxCombo = combo;
+                hitsLanded++;
+                dpsAmt[dpsHead] = d;
+                dpsT[dpsHead] = now;
+                dpsHead = (dpsHead + 1) % dpsAmt.length;
                 lastHitMs = now;
                 lastDealtMs = now;
-                if (thp <= 0f) kills++;
+                if (thp <= 0f) {
+                    kills++;
+                    streak++;
+                    killFeedText = "Убит: " + le.getName().getString();
+                    killFeedUntil = now + 2500;
+                }
             }
             lastTargetId = le.getId();
             lastTargetHp = thp;
@@ -360,6 +568,9 @@ public class HudRenderer {
             if (le.getId() != swingTargetId) { swingTargetId = le.getId(); lastSwingStart = 0; prevSwing = 0; }
             tgtName = le.getName().getString() + "  " + (Math.round(le.getHealth() * 10) / 10f)
                     + "/" + (Math.round(le.getMaxHealth() * 10) / 10f);
+            tgtGear = "Броня " + le.getArmor() + " | "
+                    + (le.getMainHandStack().isEmpty() ? "пусто" : le.getMainHandStack().getName().getString());
+            tgtLow = le.getHealth() + le.getAbsorptionAmount() <= 6f;
             float d = p.distanceTo(le);
             tgtDist = "Дист: " + (Math.round(d * 10) / 10f);
             tgtDistColor = d <= 3.0f ? 0x55FF55 : (d <= 4.5f ? 0xFFAA00 : 0xFF5555);
@@ -377,6 +588,7 @@ public class HudRenderer {
             else tgtShield = "";
         } else {
             targetValid = false;
+            tgtLow = false;
         }
     }
 
@@ -429,6 +641,9 @@ public class HudRenderer {
             itemCnt[k] = n;
             itemStr[k] = String.valueOf(n);
         }
+        int tt = itemCnt[1]; // тотемы
+        if (lastTotemTotal >= 0 && tt < lastTotemTotal) totemsUsed += lastTotemTotal - tt;
+        lastTotemTotal = tt;
     }
 
     private static void updateHotbar(PlayerEntity p) {
@@ -625,6 +840,7 @@ public class HudRenderer {
             ctx.drawCenteredTextWithShadow(tr, tgtName, x, y, 0xFFFFFFFF);
             y += 10;
             ctx.drawCenteredTextWithShadow(tr, tgtDist, x, y, argb(0xFF000000, tgtDistColor));
+            if (c.targetGear) { y += 10; ctx.drawCenteredTextWithShadow(tr, tgtGear, x, y, 0xFFBBBBBB); }
             if (c.swingTracker) { y += 10; ctx.drawCenteredTextWithShadow(tr, tgtSwing, x, y, 0xFFDDDDDD); }
             if (c.shieldTimer && !tgtShield.isEmpty()) { y += 10; ctx.drawCenteredTextWithShadow(tr, tgtShield, x, y, 0xFFFFAA00); }
         }
@@ -696,7 +912,8 @@ public class HudRenderer {
             ctx.drawCenteredTextWithShadow(tr, nearestLine2, x, y + 10, 0xFFCCCCCC);
         }
 
-        if (c.infoFps || c.infoSpeed || c.infoCoords || c.infoClock || c.toolDurability || c.biomeInfo) {
+        if (c.infoFps || c.infoSpeed || c.infoCoords || c.infoClock || c.toolDurability || c.biomeInfo
+                || c.stateInfo || c.gameTime || c.playersNear) {
             int x = px(c, HudLayout.INFO, w), y = py(c, HudLayout.INFO, h);
             if (c.infoFps) {
                 ctx.drawTextWithShadow(tr, fpsText, x, y, 0xFFFFFFFF);
@@ -707,6 +924,9 @@ public class HudRenderer {
                 y += 10;
             }
             if (c.biomeInfo) { ctx.drawTextWithShadow(tr, biomeText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.stateInfo) { ctx.drawTextWithShadow(tr, stateText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.gameTime) { ctx.drawTextWithShadow(tr, gameTimeText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.playersNear) { ctx.drawTextWithShadow(tr, playersNearText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.infoSpeed) { ctx.drawTextWithShadow(tr, speedText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.infoCoords) { ctx.drawTextWithShadow(tr, coordsText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.infoClock) { ctx.drawTextWithShadow(tr, clockText, x, y, 0xFFFFFFFF); y += 10; }
@@ -722,6 +942,33 @@ public class HudRenderer {
                 ItemStack st = mc.player.getInventory().getStack(9 + i);
                 if (!st.isEmpty()) ctx.drawItem(st, bx + (i % 9) * 18, by + (i / 9) * 18);
             }
+        }
+
+        if (c.minimapEnabled) renderMinimap(ctx, mc, c, w, h);
+
+        if (c.dpsMeter)
+            ctx.drawTextWithShadow(tr, dpsText, px(c, HudLayout.DPS, w), py(c, HudLayout.DPS, h), 0xFFFFDD55);
+
+        if (c.fallInfo && !fallText.isEmpty())
+            ctx.drawCenteredTextWithShadow(tr, fallText, px(c, HudLayout.FALL, w), py(c, HudLayout.FALL, h),
+                    fallDanger ? 0xFFFF2222 : 0xFFFFDD55);
+
+        if (c.alerts && !alertText.isEmpty() && (blink || alertColor == 0xFF55FF55))
+            ctx.drawCenteredTextWithShadow(tr, alertText, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h), alertColor);
+
+        if (c.killFeed && now < killFeedUntil)
+            ctx.drawCenteredTextWithShadow(tr, killFeedText, px(c, HudLayout.KILLFEED, w), py(c, HudLayout.KILLFEED, h), 0xFFFFD700);
+
+        if (c.useBar && useBarActive) {
+            int ux = px(c, HudLayout.USEBAR, w), uy = py(c, HudLayout.USEBAR, h);
+            ctx.fill(ux - 30, uy, ux + 30, uy + 5, 0x80000000);
+            ctx.fill(ux - 30, uy, ux - 30 + (int) (60 * useFrac), uy + 5, 0xFF55FF55);
+        }
+
+        if (c.statsPanel) {
+            int sx = px(c, HudLayout.STATS, w), sy = py(c, HudLayout.STATS, h);
+            ctx.drawTextWithShadow(tr, statsLine1, sx, sy, 0xFFDDDDDD);
+            ctx.drawTextWithShadow(tr, statsLine2, sx, sy + 10, 0xFFDDDDDD);
         }
 
         if (c.lowHpAlert && ownHp > 0 && ownHp <= 6f) {
@@ -786,6 +1033,16 @@ public class HudRenderer {
             ctx.fill(cx + g, cy - o, cx + g + len, cy - o + t, color);
             ctx.fill(cx - o, cy - g - len, cx - o + t, cy - g, color);
             ctx.fill(cx - o, cy + g, cx - o + t, cy + g + len, color);
+        }
+
+        // Кольцо кулдауна удара вокруг прицела
+        if (c.cooldownRing && critCd < 0.99f) {
+            int segs = (int) (critCd * 32);
+            for (int j = 0; j < segs; j++) {
+                int x = cx + (int) (SIN[j] * 12) - 1;
+                int y = cy - (int) (COS[j] * 12) - 1;
+                ctx.fill(x, y, x + 2, y + 2, 0xFFFFAA00);
+            }
         }
 
         // Круговые таймеры эффектов вокруг прицела

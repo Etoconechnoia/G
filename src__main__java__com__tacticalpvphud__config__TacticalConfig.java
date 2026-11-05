@@ -78,6 +78,25 @@ public class TacticalConfig {
     public boolean hitFlash = true;
     public boolean biomeInfo = false;
     public boolean inventoryHud = false;
+    public boolean targetGear = false;
+    public boolean cooldownRing = false;
+    public boolean alerts = false;
+    public boolean fallInfo = false;
+    public boolean useBar = false;
+    public boolean stateInfo = false;
+    public boolean gameTime = false;
+    public boolean playersNear = false;
+    public boolean dpsMeter = false;
+    public boolean statsPanel = false;
+    public boolean killFeed = false;
+    public boolean minimapEnabled = false;
+    public boolean minimapRotate = true;
+    public boolean minimapPlayers = true;
+    public boolean minimapWaypoints = true;
+    public boolean minimapPredict = true;
+    public float predictSeconds = 2f;   // 1..5
+    public float minimapScale = 3f;     // пикселей на клетку (1..4)
+    public float minimapRange = 24f;    // радиус в блоках
 
     // ---------- Прочее ----------
     public boolean zoomEnabled = true;
@@ -154,6 +173,18 @@ public class TacticalConfig {
         hitFlash = true;
         biomeInfo = all;
         inventoryHud = all;
+        targetGear = mid;
+        cooldownRing = mid;
+        alerts = mid;
+        fallInfo = mid;
+        useBar = all;
+        stateInfo = all;
+        gameTime = all;
+        playersNear = all;
+        dpsMeter = all;
+        statsPanel = all;
+        killFeed = mid;
+        minimapEnabled = mid;
     }
 
     public static boolean[] defaultPixels() {

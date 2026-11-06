@@ -4,8 +4,7 @@ import com.tacticalpvphud.client.TacticalPvPHUDClient;
 import com.tacticalpvphud.config.TacticalConfig;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.option.ParticlesMode;
-import net.minecraft.client.sound.PositionedSoundInstance;
+import net.minecraft.client.option.SimpleOption;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.PlayerListEntry;
@@ -194,6 +193,7 @@ public class HudRenderer {
             new ItemStack(Items.SHIELD), new ItemStack(Items.WIND_CHARGE)};
     private static final String[] CD_NAMES = {"Жемчуг", "Хорус", "Щит", "Ветр. заряд"};
     private static String cdText = "";
+    private static String trapWarn = "", enemyTrap = "", trapItemsText = "", trapKitText = "", trapPointText = "";
     private static long lastKillMs = 0, lastTotemMs = 0;
     private static boolean wpKeyPrev;
     private static boolean swRunning;
@@ -271,9 +271,7 @@ public class HudRenderer {
             mc.options.sprintKey.setPressed(true);
         }
         if (c.toggleSneak && !mc.options.getSneakToggled().getValue()) mc.options.getSneakToggled().setValue(true);
-        if (c.lowParticles && mc.options.getParticles().getValue() != ParticlesMode.MINIMAL) {
-            mc.options.getParticles().setValue(ParticlesMode.MINIMAL);
-        }
+        if (c.lowParticles) forceMinimalParticles(mc);
         tickPhrases(mc, c);
         if (c.noBob && mc.options.getBobView().getValue()) mc.options.getBobView().setValue(false);
         if (c.menuBlurOff && mc.options.getMenuBackgroundBlurriness().getValue() != 0) {
@@ -488,6 +486,71 @@ public class HudRenderer {
                 }
             }
             cdText = sb.length() == 0 ? "" : "КД: " + sb;
+        }
+
+        // Помощник ловушек
+        TacticalConfig tc = TacticalConfig.get();
+        if (tickCounter % 2 == 0) {
+            trapWarn = "";
+            enemyTrap = "";
+            trapPointText = "";
+            if (tc.trapHelper && mc.world != null) {
+                BlockPos base = p.getBlockPos();
+                int bestPri = 0;
+                String bestName = "";
+                for (int dy = -1; dy <= 0; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        for (int dz = -1; dz <= 1; dz++) {
+                            MPOS.set(base.getX() + dx, base.getY() + dy, base.getZ() + dz);
+                            String id = Registries.BLOCK.getId(mc.world.getBlockState(MPOS).getBlock()).getPath();
+                            int pri = trapPriority(id);
+                            if (pri > bestPri) { bestPri = pri; bestName = trapName(id); }
+                        }
+                    }
+                }
+                if (bestPri > 0) trapWarn = "ЛОВУШКА РЯДОМ: " + bestName;
+                // Точки-ловушки: метки с именем «Ловушка…» — предупреждение, когда враг подошёл
+                if (tc.trapPointAlert) {
+                    for (TacticalConfig.Waypoint wp : tc.waypoints) {
+                        if (wp.name == null || !wp.name.toLowerCase(java.util.Locale.ROOT).startsWith("ловушка")) continue;
+                        for (PlayerEntity o : mc.world.getPlayers()) {
+                            if (o == p) continue;
+                            double ddx = o.getX() - (wp.x + 0.5), ddz = o.getZ() - (wp.z + 0.5);
+                            double dd = Math.sqrt(ddx * ddx + ddz * ddz);
+                            if (dd <= tc.trapRadius && Math.abs(o.getY() - wp.y) < 12) {
+                                trapPointText = "ВРАГ У ЛОВУШКИ «" + wp.name + "»: " + (int) dd + " м";
+                            }
+                        }
+                    }
+                }
+                if (eMarkOk && predTarget != null) {
+                    BlockPos tp = predTarget.getBlockPos();
+                    String a = Registries.BLOCK.getId(mc.world.getBlockState(tp).getBlock()).getPath();
+                    String b = Registries.BLOCK.getId(mc.world.getBlockState(tp.down()).getBlock()).getPath();
+                    if (a.equals("cobweb")) enemyTrap = "ВРАГ В ПАУТИНЕ";
+                    else if (b.equals("lava") || a.equals("lava")) enemyTrap = "ВРАГ НАД ЛАВОЙ";
+                    else if (a.endsWith("_pressure_plate") || b.endsWith("_pressure_plate")) enemyTrap = "ВРАГ НА НАЖИМНОЙ ПЛИТЕ";
+                    else if (a.startsWith("tripwire")) enemyTrap = "ВРАГ НА РАСТЯЖКЕ";
+                    if (enemyTrap.isEmpty()) {
+                        int walls = 0;
+                        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                        for (int[] d : dirs) {
+                            MPOS.set(tp.getX() + d[0], tp.getY(), tp.getZ() + d[1]);
+                            if (!mc.world.getBlockState(MPOS).isAir()) walls++;
+                        }
+                        if (walls == 4) enemyTrap = "ВРАГ В ЯМЕ (со всех сторон блоки)";
+                        else if (walls == 3) enemyTrap = "ВРАГ В УГЛУ (3 стены)";
+                    }
+                }
+            }
+        }
+        if (tickCounter % 10 == 0) {
+            trapItemsText = "Ловушки: паутина " + cnt(p, Items.COBWEB) + " | лава " + cnt(p, Items.LAVA_BUCKET)
+                    + " | TNT " + cnt(p, Items.TNT) + " | огниво " + cnt(p, Items.FLINT_AND_STEEL)
+                    + " | нитки " + cnt(p, Items.STRING);
+            trapKitText = "Набор: песок " + cnt(p, Items.SAND) + " | гравий " + cnt(p, Items.GRAVEL)
+                    + " | наковальни " + cnt(p, Items.ANVIL) + " | плиты " + cntSuffix(p, "_pressure_plate")
+                    + " | редстоун " + cnt(p, Items.REDSTONE) + " | люки " + cntSuffix(p, "_trapdoor");
         }
 
         // TNT, секундомер, время игры
@@ -753,6 +816,15 @@ public class HudRenderer {
         return n;
     }
 
+    private static int cntSuffix(PlayerEntity p, String suffix) {
+        int n = 0;
+        for (int i = 0; i < 36; i++) {
+            ItemStack s = p.getInventory().getStack(i);
+            if (!s.isEmpty() && pathEnds(s, suffix)) n += s.getCount();
+        }
+        return n;
+    }
+
     private static boolean pathEnds(ItemStack s, String suf) {
         return Registries.ITEM.getId(s.getItem()).getPath().endsWith(suf);
     }
@@ -864,10 +936,41 @@ public class HudRenderer {
     /** Короткие звуки: попадание (высокий «дзынь») и убийство (звук уровня). */
     private static void playSfx(MinecraftClient mc, boolean kill) {
         if (kill) {
-            mc.getSoundManager().play(PositionedSoundInstance.master(SoundEvents.ENTITY_PLAYER_LEVELUP, 1.0f));
+            if (mc.player != null) mc.player.playSound(SoundEvents.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
         } else {
-            mc.getSoundManager().play(PositionedSoundInstance.master(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.6f));
+            if (mc.player != null) mc.player.playSound(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.6f);
         }
+    }
+
+    private static int trapPriority(String id) {
+        if (id.equals("tnt") || id.startsWith("tripwire") || id.equals("lava")) return 5;
+        if (id.endsWith("_pressure_plate") || id.equals("fire") || id.equals("soul_fire")) return 4;
+        if (id.equals("cobweb") || id.equals("powder_snow")) return 3;
+        if (id.equals("magma_block") || id.equals("sweet_berry_bush") || id.equals("cactus")) return 2;
+        return 0;
+    }
+
+    private static String trapName(String id) {
+        if (id.equals("tnt")) return "TNT";
+        if (id.startsWith("tripwire")) return "растяжка";
+        if (id.equals("lava")) return "лава";
+        if (id.endsWith("_pressure_plate")) return "нажимная плита";
+        if (id.equals("fire") || id.equals("soul_fire")) return "огонь";
+        if (id.equals("cobweb")) return "паутина";
+        if (id.equals("powder_snow")) return "порошковый снег";
+        if (id.equals("magma_block")) return "магма";
+        if (id.equals("sweet_berry_bush")) return "ягодный куст";
+        return "кактус";
+    }
+
+    /** Минимум частиц без жёсткой привязки к имени пакета перечисления. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void forceMinimalParticles(MinecraftClient mc) {
+        SimpleOption raw = mc.options.getParticles();
+        Object cur = raw.getValue();
+        Object[] vals = ((Enum) cur).getDeclaringClass().getEnumConstants();
+        Object last = vals[vals.length - 1];
+        if (cur != last) raw.setValue(last);
     }
 
     /** Скрытие ника (режим стримера). */
@@ -921,7 +1024,7 @@ public class HudRenderer {
             deaths++;
             streak = 0;
             if (TacticalConfig.get().oofSound) {
-                mc.getSoundManager().play(PositionedSoundInstance.master(SoundEvents.ENTITY_PLAYER_HURT, 0.6f));
+                if (mc.player != null) mc.player.playSound(SoundEvents.ENTITY_PLAYER_HURT, 1.0f, 0.6f);
             }
         }
         lastHp = hp;
@@ -1322,7 +1425,7 @@ public class HudRenderer {
 
         if (c.infoFps || c.infoSpeed || c.infoCoords || c.infoClock || c.toolDurability || c.biomeInfo
                 || c.stateInfo || c.gameTime || c.playersNear
-                || c.infoServer || c.infoRam || c.stopwatchHud || c.playtimeHud || c.cooldownsHud) {
+                || c.infoServer || c.infoRam || c.stopwatchHud || c.playtimeHud || c.cooldownsHud || c.trapItems) {
             int x = px(c, HudLayout.INFO, w), y = py(c, HudLayout.INFO, h);
             if (c.infoFps) {
                 ctx.drawTextWithShadow(tr, fpsText, x, y, 0xFFFFFFFF);
@@ -1341,6 +1444,8 @@ public class HudRenderer {
             if (c.stopwatchHud) { ctx.drawTextWithShadow(tr, swText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.playtimeHud) { ctx.drawTextWithShadow(tr, playtimeText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.cooldownsHud && !cdText.isEmpty()) { ctx.drawTextWithShadow(tr, cdText, x, y, 0xFFFFDD55); y += 10; }
+            if (c.trapItems) { ctx.drawTextWithShadow(tr, trapItemsText, x, y, 0xFFDDDDDD); y += 10; }
+            if (c.trapItems) { ctx.drawTextWithShadow(tr, trapKitText, x, y, 0xFFDDDDDD); y += 10; }
             if (c.infoSpeed) { ctx.drawTextWithShadow(tr, speedText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.infoCoords) { ctx.drawTextWithShadow(tr, coordsText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.infoClock) { ctx.drawTextWithShadow(tr, clockText, x, y, 0xFFFFFFFF); y += 10; }
@@ -1414,6 +1519,14 @@ public class HudRenderer {
 
         if (c.alerts && !alertText.isEmpty() && (blink || alertColor == 0xFF55FF55))
             ctx.drawCenteredTextWithShadow(tr, alertText, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h), alertColor);
+
+        if (!trapWarn.isEmpty() && blink)
+            ctx.drawCenteredTextWithShadow(tr, trapWarn, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h) + 24, 0xFFFF5555);
+        if (!enemyTrap.isEmpty())
+            ctx.drawCenteredTextWithShadow(tr, enemyTrap, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h) + 36, 0xFFFFD700);
+
+        if (!trapPointText.isEmpty())
+            ctx.drawCenteredTextWithShadow(tr, trapPointText, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h) + 48, 0xFFFF3333);
 
         if (!tntText.isEmpty())
             ctx.drawCenteredTextWithShadow(tr, tntText, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h) + 12, 0xFFFF7755);

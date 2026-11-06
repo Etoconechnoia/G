@@ -148,6 +148,10 @@ public class TacticalConfig {
     public float zoomFov = 30f;
     public boolean chatFilter = false;
     public String chatFilterWords = "";
+    public boolean trapHelper = false;
+    public boolean trapItems = false;
+    public boolean trapPointAlert = false;
+    public float trapRadius = 8f;
     public boolean waypointsHud = true;
     public List<Waypoint> waypoints = new ArrayList<>();
 
@@ -255,6 +259,9 @@ public class TacticalConfig {
         tntCountdown = mid;
         stopwatchHud = all;
         playtimeHud = all;
+        trapHelper = mid;
+        trapItems = all;
+        trapPointAlert = mid;
     }
 
     public static boolean[] defaultPixels() {

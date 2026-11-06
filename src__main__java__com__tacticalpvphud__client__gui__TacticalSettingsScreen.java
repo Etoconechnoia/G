@@ -196,6 +196,10 @@ public class TacticalSettingsScreen extends Screen {
         r.add(toggle("Красный экран при уроне", () -> c.damageTint, v -> c.damageTint = v));
         r.add(toggle("Звук при своей смерти", () -> c.oofSound, v -> c.oofSound = v));
         r.add(toggle("Таймер TNT", () -> c.tntCountdown, v -> c.tntCountdown = v));
+        r.add(toggle("Ловушки: предупреждения", () -> c.trapHelper, v -> c.trapHelper = v));
+        r.add(toggle("Ловушки: запасы предметов", () -> c.trapItems, v -> c.trapItems = v));
+        r.add(toggle("Ловушки: враг у моей ловушки", () -> c.trapPointAlert, v -> c.trapPointAlert = v));
+        r.add(slider("Радиус тревоги ловушки (бл.)", 3, 20, () -> c.trapRadius, v -> c.trapRadius = (float) v));
         r.add(toggle("Звук при попадании", () -> c.hitSound, v -> c.hitSound = v));
         r.add(toggle("Звук при убийстве", () -> c.killSound, v -> c.killSound = v));
         r.add(toggle("Вспышка при убийстве", () -> c.killFlash, v -> c.killFlash = v));
@@ -297,6 +301,13 @@ public class TacticalSettingsScreen extends Screen {
         r.add(button("+ Метка на моей позиции", () -> {
             if (client.player == null) return;
             c.waypoints.add(new TacticalConfig.Waypoint("Метка " + (c.waypoints.size() + 1),
+                    (int) Math.floor(client.player.getX()), (int) Math.floor(client.player.getY()),
+                    (int) Math.floor(client.player.getZ())));
+            clearAndInit();
+        }));
+        r.add(button("+ Ловушка на моей позиции", () -> {
+            if (client.player == null) return;
+            c.waypoints.add(new TacticalConfig.Waypoint("Ловушка " + (c.waypoints.size() + 1),
                     (int) Math.floor(client.player.getX()), (int) Math.floor(client.player.getY()),
                     (int) Math.floor(client.player.getZ())));
             clearAndInit();

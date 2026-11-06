@@ -4,11 +4,17 @@ import com.tacticalpvphud.client.TacticalPvPHUDClient;
 import com.tacticalpvphud.config.TacticalConfig;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.option.ParticlesMode;
+import net.minecraft.client.sound.PositionedSoundInstance;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.TntEntity;
+import net.minecraft.entity.decoration.EndCrystalEntity;
+import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.effect.StatusEffect;
 import net.minecraft.entity.effect.StatusEffectCategory;
 import net.minecraft.entity.effect.StatusEffectInstance;
@@ -21,9 +27,12 @@ import net.minecraft.registry.Registries;
 import net.minecraft.screen.slot.SlotActionType;
 import com.tacticalpvphud.client.gui.RadialScreen;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.Heightmap;
+import net.minecraft.world.LightType;
 import org.lwjgl.glfw.GLFW;
 
 import java.time.LocalTime;
@@ -101,7 +110,8 @@ public class HudRenderer {
     // Эффекты
     private static final HashMap<StatusEffect, Integer> EFF_MAX = new HashMap<>();
     private static final HashSet<StatusEffect> EFF_SEEN = new HashSet<>();
-    private static final String[] effLines = new String[6];
+    private static final String[] effLines = new String[8];
+    private static final int[] effColor = new int[8];
     private static int effCount;
     private static final float[] ringFrac = new float[4];
     private static final int[] ringColor = new int[4];
@@ -154,12 +164,42 @@ public class HudRenderer {
     private static final int GRID = 31;
     private static final int[] mapColors = new int[GRID * GRID];
     private static final BlockPos.Mutable MPOS = new BlockPos.Mutable();
-    private static final int MAXMARK = 24;
+    private static final int MAXMARK = 48;
     private static final int[] markX = new int[MAXMARK], markY = new int[MAXMARK], markType = new int[MAXMARK];
     private static int markCount, predX, predY, offX, offY;
     private static boolean predOk;
     private static String predText = "";
 
+    // ---- предсказание врага, режимы PvP, прочее ----
+    private static LivingEntity predTarget;
+    private static long predTargetUntil;
+    private static double tvx, tvy, tvz, tLastX, tLastY, tLastZ;
+    private static boolean tHasLast, eMarkOk;
+    private static double eWX, eWY, eWZ, eCX, eCY, eCZ;
+    private static boolean projOk;
+    private static int projX, projY;
+    private static String serverText = "", ramText = "";
+    public static final String[] MODE_NAMES = {"Axe / Shield", "Sword", "Crystal", "Pot (Netherite/Diamond)", "UHC",
+            "SMP / Vanilla", "Bow", "Spear", "Mace", "Spear-Mace", "Elytra-Mace", "Elytra Swap",
+            "Trident / Riptide", "Trident-Mace"};
+    private static final String[] modeLines = new String[7];
+    private static int modeCount;
+
+    // ---- MiniHUD-подобная информация ----
+    private static final String[] FACE_RU = {"Север (-Z)", "Восток (+X)", "Юг (+Z)", "Запад (-X)"};
+    private static String miniLightText = "", miniChunkText = "", miniFacingText = "", miniBlockText = "",
+            miniDimText = "", miniEntText = "";
+
+    private static final ItemStack[] CD_STACKS = {new ItemStack(Items.ENDER_PEARL), new ItemStack(Items.CHORUS_FRUIT),
+            new ItemStack(Items.SHIELD), new ItemStack(Items.WIND_CHARGE)};
+    private static final String[] CD_NAMES = {"Жемчуг", "Хорус", "Щит", "Ветр. заряд"};
+    private static String cdText = "";
+    private static long lastKillMs = 0, lastTotemMs = 0;
+    private static boolean wpKeyPrev;
+    private static boolean swRunning;
+    private static long swStart, swAccum;
+    private static String swText = "", playtimeText = "", tntText = "";
+    private static final boolean[] PH_PREV = new boolean[400];
     private static long lastDealtMs = 0;
     private static final String[] DIRS = {"С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"};
     private static int deaths, streak, maxCombo, swings, hitsLanded, totemsUsed, lastTotemTotal = -1;
@@ -193,6 +233,10 @@ public class HudRenderer {
         PlayerEntity p = mc.player;
         if (p == null) { sessionStart = 0; return; }
         tickCounter++;
+        if (tickCounter % 20 == 0) {
+            TacticalConfig.get().playtimeSec++;
+            if (tickCounter % 1200 == 0) TacticalConfig.save();
+        }
         long now = System.currentTimeMillis();
         if (sessionStart == 0) sessionStart = now;
         TacticalConfig c = TacticalConfig.get();
@@ -222,6 +266,34 @@ public class HudRenderer {
         handleZoom(mc, c);
         tickBinds(mc, c);
         tickRadial(mc, c);
+        if (c.toggleSprint && mc.currentScreen == null && mc.options.forwardKey.isPressed()
+                && !p.isSneaking() && p.getHungerManager().getFoodLevel() > 6) {
+            mc.options.sprintKey.setPressed(true);
+        }
+        if (c.toggleSneak && !mc.options.getSneakToggled().getValue()) mc.options.getSneakToggled().setValue(true);
+        if (c.lowParticles && mc.options.getParticles().getValue() != ParticlesMode.MINIMAL) {
+            mc.options.getParticles().setValue(ParticlesMode.MINIMAL);
+        }
+        tickPhrases(mc, c);
+        if (c.noBob && mc.options.getBobView().getValue()) mc.options.getBobView().setValue(false);
+        if (c.menuBlurOff && mc.options.getMenuBackgroundBlurriness().getValue() != 0) {
+            mc.options.getMenuBackgroundBlurriness().setValue(0);
+        }
+        if (c.weatherClear && mc.world != null) {
+            mc.world.setRainGradient(0f);
+            mc.world.setThunderGradient(0f);
+        }
+        boolean flDown = c.freelookEnabled && c.freelookKey > 0 && c.freelookKey < 400 && mc.currentScreen == null
+                && GLFW.glfwGetKey(window, c.freelookKey) == GLFW.GLFW_PRESS;
+        if (flDown && !FreeLook.active) { FreeLook.camYaw = p.getYaw(); FreeLook.camPitch = p.getPitch(); }
+        FreeLook.active = flDown;
+        boolean wpDown = c.waypointKey > 0 && c.waypointKey < 400 && mc.currentScreen == null
+                && GLFW.glfwGetKey(window, c.waypointKey) == GLFW.GLFW_PRESS;
+        if (wpDown && !wpKeyPrev) {
+            c.waypoints.add(new TacticalConfig.Waypoint("Метка " + (c.waypoints.size() + 1),
+                    p.getBlockX(), p.getBlockY(), p.getBlockZ()));
+        }
+        wpKeyPrev = wpDown;
         trackDamage(mc, p, now);
 
         // Азимут
@@ -280,7 +352,9 @@ public class HudRenderer {
         if (tickCounter % 5 == 0) updateWaypoints(p, c);
         if (tickCounter % 20 == 0) updatePing(mc, p);
         updateTutorial(p);
+        updateEnemy(p, t, now, c);
         updateExtras(mc, p, now);
+        if (c.modePanel && tickCounter % 5 == 0) updateModePanel(mc, p, c);
         if (c.minimapEnabled && tickCounter % 4 == 0) updateMinimap(mc, p, c);
     }
 
@@ -329,7 +403,7 @@ public class HudRenderer {
             float target = (float) Math.toDegrees(Math.atan2(-dx, dz));
             float rel = MathHelper.wrapDegrees(target - p.getYaw());
             int idx = ((Math.round(rel / 45f) % 8) + 8) % 8;
-            nearestLine1 = ARROWS[idx] + " " + best.getName().getString() + " " + (int) Math.sqrt(bd) + "м";
+            nearestLine1 = ARROWS[idx] + " " + nm(best.getName().getString()) + " " + (int) Math.sqrt(bd) + "м";
             String held = best.getMainHandStack().isEmpty() ? "пусто" : best.getMainHandStack().getName().getString();
             nearestLine2 = "HP " + (Math.round(best.getHealth() * 10) / 10f) + " | " + held;
         }
@@ -377,11 +451,76 @@ public class HudRenderer {
             }
         }
 
+        // MiniHUD-подобная информация
+        if (tickCounter % 5 == 0 && mc.world != null) {
+            BlockPos bp = p.getBlockPos();
+            miniLightText = "Свет: блок " + mc.world.getLightLevel(LightType.BLOCK, bp)
+                    + " | небо " + mc.world.getLightLevel(LightType.SKY, bp);
+            int ccx = p.getChunkPos().x, ccz = p.getChunkPos().z;
+            miniChunkText = "Чанк " + ccx + " " + ccz + " (внутри " + (p.getBlockX() & 15) + " " + p.getBlockY()
+                    + " " + (p.getBlockZ() & 15) + ") | r." + (ccx >> 5) + "." + (ccz >> 5);
+            float azm = ((p.getYaw() + 180f) % 360f + 360f) % 360f;
+            miniFacingText = "Смотрит: " + FACE_RU[(int) ((azm + 45f) / 90f) % 4] + " | yaw "
+                    + Math.round(MathHelper.wrapDegrees(p.getYaw())) + " pitch " + Math.round(p.getPitch());
+            HitResult hr = mc.crosshairTarget;
+            if (hr instanceof BlockHitResult bhr && hr.getType() == HitResult.Type.BLOCK) {
+                miniBlockText = "Блок: " + mc.world.getBlockState(bhr.getBlockPos()).getBlock().getName().getString()
+                        + " (" + (Math.round(p.getEyePos().distanceTo(bhr.getPos()) * 10) / 10f) + " м)";
+            } else {
+                miniBlockText = "Блок: —";
+            }
+            miniDimText = "Мир: " + mc.world.getRegistryKey().getValue().getPath();
+        }
+        if (tickCounter % 20 == 0 && mc.world != null) {
+            int ne = 0;
+            for (Entity e : mc.world.getEntities()) ne++;
+            miniEntText = "Сущностей: " + ne;
+        }
+
+        // Кулдауны предметов
+        if (tickCounter % 2 == 0) {
+            StringBuilder sb = new StringBuilder();
+            for (int k = 0; k < CD_STACKS.length; k++) {
+                float pr = p.getItemCooldownManager().getCooldownProgress(CD_STACKS[k], 0f);
+                if (pr > 0f) {
+                    if (sb.length() > 0) sb.append(" | ");
+                    sb.append(CD_NAMES[k]).append(' ').append(Math.round(pr * 100)).append('%');
+                }
+            }
+            cdText = sb.length() == 0 ? "" : "КД: " + sb;
+        }
+
+        // TNT, секундомер, время игры
+        TacticalConfig cfg = TacticalConfig.get();
+        tntText = "";
+        if (cfg.tntCountdown && mc.world != null && tickCounter % 2 == 0) {
+            TntEntity bt = null;
+            double tbd = 900;
+            for (TntEntity te : mc.world.getEntitiesByClass(TntEntity.class, p.getBoundingBox().expand(30), x -> true)) {
+                double d = p.squaredDistanceTo(te);
+                if (d < tbd) { tbd = d; bt = te; }
+            }
+            if (bt != null) tntText = "TNT: " + (Math.round(bt.getFuse() / 2f) / 10f) + " с (" + (int) Math.sqrt(tbd) + " м)";
+        }
+        long swMs = swAccum + (swRunning ? now - swStart : 0);
+        swText = "Секундомер " + two(swMs / 60000) + ":" + two(swMs / 1000 % 60) + "." + (swMs / 100 % 10);
+        long ps = cfg.playtimeSec;
+        playtimeText = "Наиграно: " + (ps / 3600) + "ч " + (ps / 60 % 60) + "м";
+
+        // Сервер и память
+        if (tickCounter % 40 == 0) {
+            var si = mc.getCurrentServerEntry();
+            serverText = si != null ? "Сервер: " + si.address : "Одиночная игра";
+            Runtime rt = Runtime.getRuntime();
+            ramText = "ОЗУ: " + ((rt.totalMemory() - rt.freeMemory()) >> 20) + "/" + (rt.maxMemory() >> 20) + " МБ";
+        }
+
         // Состояние, игровое время
         stateText = p.isSprinting() ? "Спринт" : (p.isSneaking() ? "Присед" : (p.isSwimming() ? "Плывёт" : "Ходьба"));
         if (tickCounter % 5 == 0 && mc.world != null) {
             long t = mc.world.getTimeOfDay() % 24000;
-            gameTimeText = "Игровое время " + two((t / 1000 + 6) % 24) + ":" + two((t % 1000) * 60 / 1000);
+            gameTimeText = "Игровое время " + two((t / 1000 + 6) % 24) + ":" + two((t % 1000) * 60 / 1000)
+                    + " (день " + (mc.world.getTimeOfDay() / 24000) + ")";
         }
     }
 
@@ -406,6 +545,7 @@ public class HudRenderer {
         double bx = p.getX(), bz = p.getZ();
         int py = p.getBlockY();
         var cm = mc.world.getChunkManager();
+        boolean under = !mc.world.isSkyVisible(p.getBlockPos()); // пещера/Незер: срез на уровне игрока
 
         for (int gz = 0; gz < GRID; gz++) {
             for (int gx = 0; gx < GRID; gx++) {
@@ -414,9 +554,19 @@ public class HudRenderer {
                 int wz = (int) Math.floor(bz + (rz * sx - fz * sy) * step);
                 int idx = gz * GRID + gx;
                 if (!cm.isChunkLoaded(wx >> 4, wz >> 4)) { mapColors[idx] = 0x222222; continue; }
-                int y = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, wx, wz) - 1;
-                MPOS.set(wx, y, wz);
-                BlockState st = mc.world.getBlockState(MPOS);
+                int y;
+                BlockState st;
+                if (under) {
+                    y = py + 1;
+                    st = mc.world.getBlockState(MPOS.set(wx, y, wz));
+                    int n = 0;
+                    while (st.isAir() && n < 14) { y--; n++; st = mc.world.getBlockState(MPOS.set(wx, y, wz)); }
+                    if (st.isAir()) { mapColors[idx] = 0x111111; continue; }
+                } else {
+                    y = mc.world.getTopY(Heightmap.Type.WORLD_SURFACE, wx, wz) - 1;
+                    MPOS.set(wx, y, wz);
+                    st = mc.world.getBlockState(MPOS);
+                }
                 int col = st.getMapColor(mc.world, MPOS).color;
                 float shade = 1f + MathHelper.clamp((y - py) / 24f, -0.4f, 0.4f);
                 int cr = Math.min(255, (int) (((col >> 16) & 255) * shade));
@@ -433,6 +583,15 @@ public class HudRenderer {
                 toMap(o.getX() - bx, o.getZ() - bz, fx, fz, rx, rz, step, cell);
                 if (Math.abs(offX) <= half && Math.abs(offY) <= half) {
                     markX[markCount] = offX; markY[markCount] = offY; markType[markCount] = 0; markCount++;
+                }
+            }
+        }
+        if (c.minimapMobs) {
+            for (net.minecraft.entity.Entity e : mc.world.getEntities()) {
+                if (!(e instanceof HostileEntity) || markCount >= MAXMARK) continue;
+                toMap(e.getX() - bx, e.getZ() - bz, fx, fz, rx, rz, step, cell);
+                if (Math.abs(offX) <= half && Math.abs(offY) <= half) {
+                    markX[markCount] = offX; markY[markCount] = offY; markType[markCount] = 2; markCount++;
                 }
             }
         }
@@ -469,9 +628,11 @@ public class HudRenderer {
         int cell = Math.max(1, Math.round(c.minimapScale));
         int size = GRID * cell;
         int x0 = px(c, HudLayout.MINIMAP, w), y0 = py(c, HudLayout.MINIMAP, h);
-        ctx.fill(x0 - 1, y0 - 1, x0 + size + 1, y0 + size + 1, 0xFF000000);
+        if (!c.minimapCircle) ctx.fill(x0 - 1, y0 - 1, x0 + size + 1, y0 + size + 1, 0xFF000000);
         for (int gz = 0; gz < GRID; gz++) {
             for (int gx = 0; gx < GRID; gx++) {
+                int ddx = gx - GRID / 2, ddz = gz - GRID / 2;
+                if (c.minimapCircle && ddx * ddx + ddz * ddz > (GRID / 2) * (GRID / 2)) continue;
                 int x = x0 + gx * cell, y = y0 + gz * cell;
                 ctx.fill(x, y, x + cell, y + cell, 0xFF000000 | mapColors[gz * GRID + gx]);
             }
@@ -480,7 +641,14 @@ public class HudRenderer {
 
         for (int i = 0; i < markCount; i++) {
             int mx = cx + markX[i], my = cy + markY[i];
-            ctx.fill(mx - 1, my - 1, mx + 2, my + 2, markType[i] == 0 ? 0xFFFF3333 : 0xFF33FFFF);
+            ctx.fill(mx - 1, my - 1, mx + 2, my + 2, markType[i] == 0 ? 0xFFFF3333 : (markType[i] == 1 ? 0xFF33FFFF : 0xFFFF9900));
+        }
+
+        if (c.minimapNorth && c.minimapRotate) {
+            double yr0 = Math.toRadians(mc.player.getYaw());
+            int nx = cx + (int) (Math.sin(yr0) * (size / 2 - 5));
+            int ny = cy + (int) (Math.cos(yr0) * (size / 2 - 5));
+            ctx.drawTextWithShadow(mc.textRenderer, "С", nx - 3, ny - 4, 0xFF55FFFF);
         }
 
         if (c.minimapPredict && predOk) {
@@ -503,6 +671,236 @@ public class HudRenderer {
         }
     }
 
+    /** Запоминает цель на секунду после потери прицела и считает её скорость по смещению позиции. */
+    private static void updateEnemy(PlayerEntity p, Entity t, long now, TacticalConfig c) {
+        if (t instanceof LivingEntity le && le != p) {
+            if (le != predTarget) tHasLast = false;
+            predTarget = le;
+            predTargetUntil = now + 1000;
+        }
+        LivingEntity e = predTarget;
+        if (e == null || now > predTargetUntil || !e.isAlive() || e.isRemoved()) { eMarkOk = false; tHasLast = false; return; }
+        double x = e.getX(), y = e.getY(), z = e.getZ();
+        if (tHasLast) {
+            tvx = tvx * 0.5 + (x - tLastX) * 0.5;
+            tvy = tvy * 0.5 + (y - tLastY) * 0.5;
+            tvz = tvz * 0.5 + (z - tLastZ) * 0.5;
+        } else {
+            tvx = 0; tvy = 0; tvz = 0;
+        }
+        tLastX = x; tLastY = y; tLastZ = z;
+        tHasLast = true;
+        double ticks = MathHelper.clamp(c.enemyPredictSec, 0.2f, 1.5f) * 20;
+        eCX = x; eCY = y + e.getHeight() / 2; eCZ = z;
+        eWX = x + tvx * ticks;
+        eWZ = z + tvz * ticks;
+        eWY = eCY + (e.isOnGround() ? 0 : tvy * ticks);
+        eMarkOk = true;
+    }
+
+    /** Перевод точки мира в координаты экрана (проекция по FOV, взгляду игрока). */
+    private static void project(MinecraftClient mc, double wx, double wy, double wz, int w, int h) {
+        PlayerEntity p = mc.player;
+        var eye = p.getEyePos();
+        double dx = wx - eye.x, dy = wy - eye.y, dz = wz - eye.z;
+        double yaw = Math.toRadians(p.getYaw()), pitch = Math.toRadians(p.getPitch());
+        double sy = Math.sin(yaw), cy = Math.cos(yaw), sp = Math.sin(pitch), cp = Math.cos(pitch);
+        double fx = -sy * cp, fy = -sp, fz = cy * cp;
+        double rx = -cy, rz = -sy;
+        double ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy;
+        double depth = dx * fx + dy * fy + dz * fz;
+        projOk = false;
+        if (depth < 0.1) return;
+        double tanH = Math.tan(Math.toRadians(mc.options.getFov().getValue()) / 2.0);
+        double nx = ((dx * rx + dz * rz) / depth) / (tanH * ((double) w / h));
+        double ny = ((dx * ux + dy * uy + dz * uz) / depth) / tanH;
+        projX = (int) (w / 2.0 + nx * w / 2.0);
+        projY = (int) (h / 2.0 - ny * h / 2.0);
+        projOk = true;
+    }
+
+    private static void renderEnemyMarker(DrawContext ctx, MinecraftClient mc, int w, int h) {
+        project(mc, eCX, eCY, eCZ, w, h);
+        boolean okC = projOk;
+        int cx0 = projX, cy0 = projY;
+        project(mc, eWX, eWY, eWZ, w, h);
+        if (!projOk) return;
+        int ex = projX, ey = projY;
+        if (okC) {
+            for (int k = 1; k <= 4; k++) {
+                int ix = cx0 + (ex - cx0) * k / 5, iy = cy0 + (ey - cy0) * k / 5;
+                ctx.fill(ix, iy, ix + 2, iy + 2, 0xCCFF4444);
+            }
+        }
+        ctx.fill(ex - 4, ey - 4, ex + 4, ey + 4, 0x66FF0000);
+        ctx.fill(ex - 4, ey - 4, ex + 4, ey - 3, 0xFFFF2222);
+        ctx.fill(ex - 4, ey + 3, ex + 4, ey + 4, 0xFFFF2222);
+        ctx.fill(ex - 4, ey - 4, ex - 3, ey + 4, 0xFFFF2222);
+        ctx.fill(ex + 3, ey - 4, ex + 4, ey + 4, 0xFFFF2222);
+    }
+
+    // ---------- помощник режимов PvP ----------
+    private static void ml(String s) { if (modeCount < modeLines.length) modeLines[modeCount++] = s; }
+
+    private static int cnt(PlayerEntity p, Item it) {
+        int n = 0;
+        for (int i = 0; i < 36; i++) {
+            ItemStack s = p.getInventory().getStack(i);
+            if (s.isOf(it)) n += s.getCount();
+        }
+        ItemStack o = p.getOffHandStack();
+        if (o.isOf(it)) n += o.getCount();
+        return n;
+    }
+
+    private static boolean pathEnds(ItemStack s, String suf) {
+        return Registries.ITEM.getId(s.getItem()).getPath().endsWith(suf);
+    }
+
+    /** Урон булавы: база 6 + бонус за высоту падения (4/блок первые 3, 2/блок до 8, затем 1/блок). */
+    private static int maceDmg(double f) {
+        double bonus = f <= 0 ? 0 : (f <= 3 ? 4 * f : (f <= 8 ? 12 + 2 * (f - 3) : 22 + (f - 8)));
+        return (int) Math.round(6 + bonus);
+    }
+
+    private static String crystalLine(MinecraftClient mc, PlayerEntity p) {
+        if (mc.world == null) return "Кристаллы рядом: нет";
+        EndCrystalEntity best = null;
+        double bd = 144;
+        for (EndCrystalEntity e : mc.world.getEntitiesByClass(EndCrystalEntity.class, p.getBoundingBox().expand(12), x -> true)) {
+            double d = p.squaredDistanceTo(e);
+            if (d < bd) { bd = d; best = e; }
+        }
+        if (best == null) return "Кристаллы рядом: нет";
+        double dist = Math.sqrt(bd), imp = 1 - dist / 12.0;
+        int dmg = (int) ((imp * imp + imp) / 2.0 * 7 * 12 + 1);
+        return "Кристалл " + (int) dist + "м: ~" + dmg + " урона (до брони)";
+    }
+
+    private static void updateModePanel(MinecraftClient mc, PlayerEntity p, TacticalConfig c) {
+        modeCount = 0;
+        ItemStack main = p.getMainHandStack();
+        int cd = Math.round(critCd * 100);
+        double fall = p.isOnGround() ? 0 : p.fallDistance;
+        boolean mace = main.isOf(Items.MACE);
+        boolean sprint = p.isSprinting();
+        switch (MathHelper.clamp(c.pvpMode, 0, MODE_NAMES.length - 1)) {
+            case 0 -> {
+                ml("Топор в руке: " + (pathEnds(main, "_axe") ? "да" : "нет") + " | КД " + cd + "%");
+                ml("Щит врага: " + (tgtShield.isEmpty() ? "опущен/нет цели" : tgtShield));
+                ml("Мой щит: " + ((p.getOffHandStack().isOf(Items.SHIELD) || main.isOf(Items.SHIELD)) ? "в руке" : "не в руке"));
+            }
+            case 1 -> {
+                ml("Меч в руке: " + (pathEnds(main, "_sword") ? "да" : "нет") + " | КД " + cd + "%");
+                ml("Крит: " + (critReady ? "ГОТОВ" : "нет") + (sprint ? " (спринт мешает)" : ""));
+            }
+            case 2 -> {
+                ml("Кристаллов " + cnt(p, Items.END_CRYSTAL) + " | обсидиана " + cnt(p, Items.OBSIDIAN)
+                        + " | якорей " + cnt(p, Items.RESPAWN_ANCHOR));
+                ml(crystalLine(mc, p));
+                ml("Тотем в левой руке: " + (p.getOffHandStack().isOf(Items.TOTEM_OF_UNDYING) ? "да" : "НЕТ"));
+            }
+            case 3 -> {
+                ml("Зелий (взрывных) " + cnt(p, Items.SPLASH_POTION) + " | тотемов " + cnt(p, Items.TOTEM_OF_UNDYING));
+                ml("Скорость: " + (p.hasStatusEffect(StatusEffects.SPEED) ? "есть" : "НЕТ")
+                        + " | Сила: " + (p.hasStatusEffect(StatusEffects.STRENGTH) ? "есть" : "НЕТ"));
+                ml("Огнестойкость: " + (p.hasStatusEffect(StatusEffects.FIRE_RESISTANCE) ? "есть" : "НЕТ"));
+            }
+            case 4 -> {
+                ml("Золотых яблок " + (cnt(p, Items.GOLDEN_APPLE) + cnt(p, Items.ENCHANTED_GOLDEN_APPLE)));
+                ml("Вода " + cnt(p, Items.WATER_BUCKET) + " | лава " + cnt(p, Items.LAVA_BUCKET));
+                ml("Паутина " + cnt(p, Items.COBWEB) + " | булыжник " + cnt(p, Items.COBBLESTONE));
+            }
+            case 5 -> {
+                ml("Тотемов " + cnt(p, Items.TOTEM_OF_UNDYING) + " | яблок "
+                        + (cnt(p, Items.GOLDEN_APPLE) + cnt(p, Items.ENCHANTED_GOLDEN_APPLE)) + " | жемчуга " + cnt(p, Items.ENDER_PEARL));
+                ml(foodText);
+            }
+            case 6 -> {
+                ml("Стрел " + cnt(p, Items.ARROW));
+                ml("Натяг: " + (useBarActive ? Math.round(useFrac * 100) + "%" : "—"));
+                ml("Цель: " + (targetValid ? tgtDist : "—"));
+            }
+            case 7 -> {
+                ml("Копьё в руке: " + (pathEnds(main, "_spear") ? "да" : "нет") + " | КД " + cd + "%");
+                ml("Бег: " + (sprint ? "да" : "нет"));
+            }
+            case 8 -> {
+                ml("Булава в руке: " + (mace ? "да" : "нет") + " | КД " + cd + "%");
+                ml("Высота падения: " + (int) fall + " бл. | смэш ~" + maceDmg(fall));
+                ml("Ветровых зарядов " + cnt(p, Items.WIND_CHARGE));
+            }
+            case 9 -> {
+                ml("Копьё: " + (pathEnds(main, "_spear") ? "да" : "нет") + " | булава: " + (mace ? "да" : "нет"));
+                ml("КД " + cd + "% | бег " + (sprint ? "да" : "нет"));
+                ml("Падение " + (int) fall + " бл. | смэш ~" + maceDmg(fall));
+            }
+            case 10 -> {
+                ml("Нагрудник: " + (p.getEquippedStack(EquipmentSlot.CHEST).isOf(Items.ELYTRA) ? "ЭЛИТРЫ" : "броня"));
+                double sp = Math.sqrt(p.getVelocity().x * p.getVelocity().x + p.getVelocity().z * p.getVelocity().z) * 20;
+                ml("Скорость " + Math.round(sp) + " б/с | падение " + (int) fall + " бл.");
+                ml("Смэш ~" + maceDmg(fall) + " | ракет " + cnt(p, Items.FIREWORK_ROCKET));
+            }
+            case 11 -> {
+                ItemStack ch = p.getEquippedStack(EquipmentSlot.CHEST);
+                ml("Надето: " + (ch.isOf(Items.ELYTRA) ? "элитры" : (ch.isEmpty() ? "ничего" : "нагрудник")));
+                ml("Элитр в инвентаре " + cnt(p, Items.ELYTRA) + " | нагрудников "
+                        + (cnt(p, Items.NETHERITE_CHESTPLATE) + cnt(p, Items.DIAMOND_CHESTPLATE)));
+                ml("Ракет " + cnt(p, Items.FIREWORK_ROCKET));
+            }
+            case 12 -> {
+                ml("Трезубцев " + cnt(p, Items.TRIDENT) + " | в руке: " + (main.isOf(Items.TRIDENT) ? "да" : "нет"));
+                ml("Риптайд: " + (p.isTouchingWaterOrRain() ? "доступен" : "нужна вода/дождь"));
+            }
+            default -> {
+                ml("Трезубец: " + (main.isOf(Items.TRIDENT) ? "в руке" : "нет") + " | риптайд "
+                        + (p.isTouchingWaterOrRain() ? "ок" : "нет воды"));
+                ml("Падение " + (int) fall + " бл. | смэш ~" + maceDmg(fall));
+                ml("Ветровых зарядов " + cnt(p, Items.WIND_CHARGE));
+            }
+        }
+    }
+
+    /** Короткие звуки: попадание (высокий «дзынь») и убийство (звук уровня). */
+    private static void playSfx(MinecraftClient mc, boolean kill) {
+        if (kill) {
+            mc.getSoundManager().play(PositionedSoundInstance.master(SoundEvents.ENTITY_PLAYER_LEVELUP, 1.0f));
+        } else {
+            mc.getSoundManager().play(PositionedSoundInstance.master(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 1.6f));
+        }
+    }
+
+    /** Скрытие ника (режим стримера). */
+    private static String nm(String name) {
+        return TacticalConfig.get().nickHider ? "Игрок" : name;
+    }
+
+    public static void swToggle() {
+        long now = System.currentTimeMillis();
+        if (swRunning) { swAccum += now - swStart; swRunning = false; }
+        else { swStart = now; swRunning = true; }
+    }
+
+    public static void swReset() { swAccum = 0; swRunning = false; }
+
+    /** Быстрые фразы: клавиша -> сообщение или команда в чат. */
+    private static void tickPhrases(MinecraftClient mc, TacticalConfig c) {
+        if (!c.quickPhrases || mc.currentScreen != null || mc.player == null) { Arrays.fill(PH_PREV, false); return; }
+        long win = mc.getWindow().getHandle();
+        boolean[] nowDown = new boolean[400];
+        for (TacticalConfig.Phrase ph : c.phrases) {
+            if (ph.key > 0 && ph.key < 400) nowDown[ph.key] = GLFW.glfwGetKey(win, ph.key) == GLFW.GLFW_PRESS;
+        }
+        for (TacticalConfig.Phrase ph : c.phrases) {
+            if (ph.key > 0 && ph.key < 400 && nowDown[ph.key] && !PH_PREV[ph.key]
+                    && ph.text != null && !ph.text.isEmpty()) {
+                if (ph.text.startsWith("/")) mc.player.networkHandler.sendChatCommand(ph.text.substring(1));
+                else mc.player.networkHandler.sendChatMessage(ph.text);
+            }
+        }
+        System.arraycopy(nowDown, 0, PH_PREV, 0, 400);
+    }
+
     private static String two(long v) { return v < 10 ? "0" + v : String.valueOf(v); }
 
     private static void markCombat(long now) {
@@ -519,7 +917,13 @@ public class HudRenderer {
             addIndicator(d, false, now);
             markCombat(now);
         }
-        if (hp <= 0f && lastHp > 0f) { deaths++; streak = 0; }
+        if (hp <= 0f && lastHp > 0f) {
+            deaths++;
+            streak = 0;
+            if (TacticalConfig.get().oofSound) {
+                mc.getSoundManager().play(PositionedSoundInstance.master(SoundEvents.ENTITY_PLAYER_HURT, 0.6f));
+            }
+        }
         lastHp = hp;
 
         Entity t = mc.targetedEntity;
@@ -538,11 +942,14 @@ public class HudRenderer {
                 dpsHead = (dpsHead + 1) % dpsAmt.length;
                 lastHitMs = now;
                 lastDealtMs = now;
+                if (TacticalConfig.get().hitSound) playSfx(mc, false);
                 if (thp <= 0f) {
                     kills++;
                     streak++;
-                    killFeedText = "Убит: " + le.getName().getString();
+                    killFeedText = "Убит: " + nm(le.getName().getString());
                     killFeedUntil = now + 2500;
+                    lastKillMs = now;
+                    if (TacticalConfig.get().killSound) playSfx(mc, true);
                 }
             }
             lastTargetId = le.getId();
@@ -566,7 +973,7 @@ public class HudRenderer {
         if (t instanceof LivingEntity le) {
             targetValid = true;
             if (le.getId() != swingTargetId) { swingTargetId = le.getId(); lastSwingStart = 0; prevSwing = 0; }
-            tgtName = le.getName().getString() + "  " + (Math.round(le.getHealth() * 10) / 10f)
+            tgtName = nm(le.getName().getString()) + "  " + (Math.round(le.getHealth() * 10) / 10f)
                     + "/" + (Math.round(le.getMaxHealth() * 10) / 10f);
             tgtGear = "Броня " + le.getArmor() + " | "
                     + (le.getMainHandStack().isEmpty() ? "пусто" : le.getMainHandStack().getName().getString());
@@ -619,7 +1026,8 @@ public class HudRenderer {
                 ringColor[ringCount] = harmful ? 0xFF5555 : 0x55FFFF;
                 ringCount++;
             }
-            if (harmful && effCount < 6) {
+            if ((harmful || TacticalConfig.get().effectsAll) && effCount < 8) {
+                effColor[effCount] = harmful ? 0xFF5555 : 0x55FF55;
                 effLines[effCount++] = eff.getName().getString() + " " + (inst.isInfinite() ? "∞" : (dur / 20 + 1) + "с");
             }
         }
@@ -642,7 +1050,7 @@ public class HudRenderer {
             itemStr[k] = String.valueOf(n);
         }
         int tt = itemCnt[1]; // тотемы
-        if (lastTotemTotal >= 0 && tt < lastTotemTotal) totemsUsed += lastTotemTotal - tt;
+        if (lastTotemTotal >= 0 && tt < lastTotemTotal) { totemsUsed += lastTotemTotal - tt; lastTotemMs = System.currentTimeMillis(); }
         lastTotemTotal = tt;
     }
 
@@ -861,9 +1269,9 @@ public class HudRenderer {
             }
         }
 
-        if (c.debuffTracker && effCount > 0) {
+        if ((c.debuffTracker || c.effectsAll) && effCount > 0) {
             int x = px(c, HudLayout.EFFECTS, w), y = py(c, HudLayout.EFFECTS, h);
-            for (int i = 0; i < effCount; i++) { ctx.drawTextWithShadow(tr, effLines[i], x, y, 0xFFFF5555); y += 10; }
+            for (int i = 0; i < effCount; i++) { ctx.drawTextWithShadow(tr, effLines[i], x, y, argb(0xFF000000, effColor[i])); y += 10; }
         }
 
         if (c.itemCounter) {
@@ -913,7 +1321,8 @@ public class HudRenderer {
         }
 
         if (c.infoFps || c.infoSpeed || c.infoCoords || c.infoClock || c.toolDurability || c.biomeInfo
-                || c.stateInfo || c.gameTime || c.playersNear) {
+                || c.stateInfo || c.gameTime || c.playersNear
+                || c.infoServer || c.infoRam || c.stopwatchHud || c.playtimeHud || c.cooldownsHud) {
             int x = px(c, HudLayout.INFO, w), y = py(c, HudLayout.INFO, h);
             if (c.infoFps) {
                 ctx.drawTextWithShadow(tr, fpsText, x, y, 0xFFFFFFFF);
@@ -927,6 +1336,11 @@ public class HudRenderer {
             if (c.stateInfo) { ctx.drawTextWithShadow(tr, stateText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.gameTime) { ctx.drawTextWithShadow(tr, gameTimeText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.playersNear) { ctx.drawTextWithShadow(tr, playersNearText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.infoServer) { ctx.drawTextWithShadow(tr, serverText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.infoRam) { ctx.drawTextWithShadow(tr, ramText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.stopwatchHud) { ctx.drawTextWithShadow(tr, swText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.playtimeHud) { ctx.drawTextWithShadow(tr, playtimeText, x, y, 0xFFFFFFFF); y += 10; }
+            if (c.cooldownsHud && !cdText.isEmpty()) { ctx.drawTextWithShadow(tr, cdText, x, y, 0xFFFFDD55); y += 10; }
             if (c.infoSpeed) { ctx.drawTextWithShadow(tr, speedText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.infoCoords) { ctx.drawTextWithShadow(tr, coordsText, x, y, 0xFFFFFFFF); y += 10; }
             if (c.infoClock) { ctx.drawTextWithShadow(tr, clockText, x, y, 0xFFFFFFFF); y += 10; }
@@ -944,6 +1358,51 @@ public class HudRenderer {
             }
         }
 
+        if (c.miniLight || c.miniChunkInfo || c.miniFacingInfo || c.miniBlockInfo || c.miniDimInfo || c.miniEntInfo) {
+            int mx = px(c, HudLayout.MINIINFO, w), my = py(c, HudLayout.MINIINFO, h);
+            if (c.miniLight) { ctx.drawTextWithShadow(tr, miniLightText, mx, my, 0xFFFFFFFF); my += 10; }
+            if (c.miniChunkInfo) { ctx.drawTextWithShadow(tr, miniChunkText, mx, my, 0xFFFFFFFF); my += 10; }
+            if (c.miniFacingInfo) { ctx.drawTextWithShadow(tr, miniFacingText, mx, my, 0xFFFFFFFF); my += 10; }
+            if (c.miniBlockInfo) { ctx.drawTextWithShadow(tr, miniBlockText, mx, my, 0xFFFFFFFF); my += 10; }
+            if (c.miniDimInfo) { ctx.drawTextWithShadow(tr, miniDimText, mx, my, 0xFFFFFFFF); my += 10; }
+            if (c.miniEntInfo) { ctx.drawTextWithShadow(tr, miniEntText, mx, my, 0xFFFFFFFF); my += 10; }
+        }
+
+        if (c.damageTint && mc.player.hurtTime > 0) {
+            int al = Math.min(110, mc.player.hurtTime * 11);
+            ctx.fill(0, 0, w, h, (al << 24) | 0xFF0000);
+        }
+        if (c.totemFlash && now - lastTotemMs < 500) {
+            int al = (int) (130 * (1f - (now - lastTotemMs) / 500f));
+            ctx.fill(0, 0, w, h, (al << 24) | 0xFFD700);
+        }
+        if (c.killFlash && now - lastKillMs < 700) {
+            int al = (int) (200 * (1f - (now - lastKillMs) / 700f));
+            int kc = (al << 24) | 0xFFFFFF, kb = 5;
+            ctx.fill(0, 0, w, kb, kc);
+            ctx.fill(0, h - kb, w, h, kc);
+            ctx.fill(0, 0, kb, h, kc);
+            ctx.fill(w - kb, 0, w, h, kc);
+        }
+        if (c.hitCross && now - lastDealtMs < 200) {
+            int hx = px(c, HudLayout.CROSSHAIR, w), hy = py(c, HudLayout.CROSSHAIR, h);
+            for (int k = 4; k <= 9; k += 2) {
+                ctx.fill(hx + k, hy + k, hx + k + 2, hy + k + 2, 0xFFFFFFFF);
+                ctx.fill(hx - k - 2, hy + k, hx - k, hy + k + 2, 0xFFFFFFFF);
+                ctx.fill(hx + k, hy - k - 2, hx + k + 2, hy - k, 0xFFFFFFFF);
+                ctx.fill(hx - k - 2, hy - k - 2, hx - k, hy - k, 0xFFFFFFFF);
+            }
+        }
+
+        if (c.enemyPredict && eMarkOk) renderEnemyMarker(ctx, mc, w, h);
+
+        if (c.modePanel) {
+            int mx = px(c, HudLayout.MODEPANEL, w), my = py(c, HudLayout.MODEPANEL, h);
+            int mi = MathHelper.clamp(c.pvpMode, 0, MODE_NAMES.length - 1);
+            ctx.drawTextWithShadow(tr, MODE_NAMES[mi], mx, my, 0xFFFFD700);
+            for (int i = 0; i < modeCount; i++) ctx.drawTextWithShadow(tr, modeLines[i], mx, my + 10 + i * 10, 0xFFDDDDDD);
+        }
+
         if (c.minimapEnabled) renderMinimap(ctx, mc, c, w, h);
 
         if (c.dpsMeter)
@@ -955,6 +1414,9 @@ public class HudRenderer {
 
         if (c.alerts && !alertText.isEmpty() && (blink || alertColor == 0xFF55FF55))
             ctx.drawCenteredTextWithShadow(tr, alertText, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h), alertColor);
+
+        if (!tntText.isEmpty())
+            ctx.drawCenteredTextWithShadow(tr, tntText, px(c, HudLayout.ALERTS, w), py(c, HudLayout.ALERTS, h) + 12, 0xFFFF7755);
 
         if (c.killFeed && now < killFeedUntil)
             ctx.drawCenteredTextWithShadow(tr, killFeedText, px(c, HudLayout.KILLFEED, w), py(c, HudLayout.KILLFEED, h), 0xFFFFD700);

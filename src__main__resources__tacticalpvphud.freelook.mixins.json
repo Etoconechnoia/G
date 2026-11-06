@@ -1,0 +1,7 @@
+{
+  "required": false,
+  "package": "com.tacticalpvphud.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["EntityLookMixin", "CameraRotationMixin"],
+  "injectors": { "defaultRequire": 0 }
+}

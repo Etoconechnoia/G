@@ -1,6 +1,7 @@
 package com.tacticalpvphud.client.gui;
 
 import com.tacticalpvphud.config.TacticalConfig;
+import com.tacticalpvphud.hud.HudRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
@@ -10,6 +11,7 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.sound.SoundCategory;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.lwjgl.glfw.GLFW;
@@ -28,7 +30,7 @@ import java.util.function.IntConsumer;
 public class TacticalSettingsScreen extends Screen {
 
     private enum Category {
-        VISUAL("Визуал"), INDICATORS("Индикаторы"), PVP("PvP"), BINDS("Бинды"), RADIAL("Круг"), MISC("Прочее");
+        VISUAL("Визуал"), INDICATORS("Индикаторы"), PVP("PvP"), BINDS("Бинды"), RADIAL("Круг"), WAYPOINTS("Метки"), MISC("Прочее");
         final String label;
         Category(String l) { label = l; }
     }
@@ -41,6 +43,10 @@ public class TacticalSettingsScreen extends Screen {
     private boolean picking = false;
     private boolean pickingRadial = false;
     private boolean capturingRadial = false;
+    private int capturingPhrase = -1;
+    private boolean capturingFreelook = false;
+    private boolean capturingWpKey = false;
+    private String wpName = "", wpX = "", wpY = "", wpZ = "";
     private int capturing = -1;
     private final List<IconDraw> icons = new ArrayList<>();
 
@@ -63,6 +69,9 @@ public class TacticalSettingsScreen extends Screen {
                 picking = false;
                 pickingRadial = false;
                 capturingRadial = false;
+                capturingPhrase = -1;
+                capturingFreelook = false;
+                capturingWpKey = false;
                 capturing = -1;
                 clearAndInit();
             }).dimensions(10, y, 105, 20).build());
@@ -75,6 +84,7 @@ public class TacticalSettingsScreen extends Screen {
             case PVP -> pvpRows(c);
             case BINDS -> bindRows(c);
             case RADIAL -> radialRows(c);
+            case WAYPOINTS -> waypointRows(c);
             case MISC -> miscRows(c);
         };
 
@@ -154,6 +164,16 @@ public class TacticalSettingsScreen extends Screen {
         r.add(toggle("Состояние (спринт/присед)", () -> c.stateInfo, v -> c.stateInfo = v));
         r.add(toggle("Игровое время", () -> c.gameTime, v -> c.gameTime = v));
         r.add(toggle("Игроков рядом", () -> c.playersNear, v -> c.playersNear = v));
+        r.add(toggle("Все эффекты списком", () -> c.effectsAll, v -> c.effectsAll = v));
+        r.add(toggle("Адрес сервера", () -> c.infoServer, v -> c.infoServer = v));
+        r.add(toggle("Память (ОЗУ)", () -> c.infoRam, v -> c.infoRam = v));
+        r.add(toggle("MiniHUD: уровень света", () -> c.miniLight, v -> c.miniLight = v));
+        r.add(toggle("MiniHUD: чанк и регион", () -> c.miniChunkInfo, v -> c.miniChunkInfo = v));
+        r.add(toggle("MiniHUD: куда смотрю", () -> c.miniFacingInfo, v -> c.miniFacingInfo = v));
+        r.add(toggle("MiniHUD: блок под прицелом", () -> c.miniBlockInfo, v -> c.miniBlockInfo = v));
+        r.add(toggle("MiniHUD: измерение", () -> c.miniDimInfo, v -> c.miniDimInfo = v));
+        r.add(toggle("MiniHUD: число сущностей", () -> c.miniEntInfo, v -> c.miniEntInfo = v));
+        r.add(toggle("Авто-спринт (toggle sprint)", () -> c.toggleSprint, v -> c.toggleSprint = v));
         return r;
     }
 
@@ -171,13 +191,85 @@ public class TacticalSettingsScreen extends Screen {
         r.add(toggle("DPS", () -> c.dpsMeter, v -> c.dpsMeter = v));
         r.add(toggle("Статистика (точность, К/Д)", () -> c.statsPanel, v -> c.statsPanel = v));
         r.add(toggle("Лента убийств", () -> c.killFeed, v -> c.killFeed = v));
+        r.add(toggle("Красный квадрат: куда пойдёт враг", () -> c.enemyPredict, v -> c.enemyPredict = v));
+        r.add(slider("Предсказание врага (сек)", 0.2, 1.5, () -> c.enemyPredictSec, v -> c.enemyPredictSec = (float) v));
+        r.add(toggle("Красный экран при уроне", () -> c.damageTint, v -> c.damageTint = v));
+        r.add(toggle("Звук при своей смерти", () -> c.oofSound, v -> c.oofSound = v));
+        r.add(toggle("Таймер TNT", () -> c.tntCountdown, v -> c.tntCountdown = v));
+        r.add(toggle("Звук при попадании", () -> c.hitSound, v -> c.hitSound = v));
+        r.add(toggle("Звук при убийстве", () -> c.killSound, v -> c.killSound = v));
+        r.add(toggle("Вспышка при убийстве", () -> c.killFlash, v -> c.killFlash = v));
+        r.add(toggle("Вспышка при тотеме", () -> c.totemFlash, v -> c.totemFlash = v));
+        r.add(toggle("Крестик при попадании", () -> c.hitCross, v -> c.hitCross = v));
+        r.add(toggle("Помощник режима PvP", () -> c.modePanel, v -> c.modePanel = v));
+        r.add(button("Режим: " + HudRenderer.MODE_NAMES[Math.floorMod(c.pvpMode, HudRenderer.MODE_NAMES.length)] + " (след.)", () -> {
+            c.pvpMode = (c.pvpMode + 1) % HudRenderer.MODE_NAMES.length;
+            clearAndInit();
+        }));
         return r;
     }
 
     private List<IntConsumer> miscRows(TacticalConfig c) {
         List<IntConsumer> r = new ArrayList<>();
+        r.add(toggle("FreeLook (свободный обзор)", () -> c.freelookEnabled, v -> c.freelookEnabled = v));
+        r.add(button("Клавиша FreeLook: " + (capturingFreelook ? "нажми клавишу..." : keyName(c.freelookKey)), () -> {
+            capturingFreelook = true;
+            clearAndInit();
+        }));
+        r.add(toggle("Без покачивания камеры (no bob)", () -> c.noBob, v -> c.noBob = v));
+        r.add(toggle("Всегда ясная погода (у себя)", () -> c.weatherClear, v -> c.weatherClear = v));
+        r.add(toggle("Без размытия меню", () -> c.menuBlurOff, v -> c.menuBlurOff = v));
+        r.add(toggle("Кулдауны предметов", () -> c.cooldownsHud, v -> c.cooldownsHud = v));
+        r.add(slider("Громкость музыки", 0, 1, () -> client.options.getSoundVolumeOption(SoundCategory.MUSIC).getValue(),
+                v -> client.options.getSoundVolumeOption(SoundCategory.MUSIC).setValue(v)));
+        r.add(slider("Громкость погоды", 0, 1, () -> client.options.getSoundVolumeOption(SoundCategory.WEATHER).getValue(),
+                v -> client.options.getSoundVolumeOption(SoundCategory.WEATHER).setValue(v)));
+        r.add(slider("Громкость окружения", 0, 1, () -> client.options.getSoundVolumeOption(SoundCategory.AMBIENT).getValue(),
+                v -> client.options.getSoundVolumeOption(SoundCategory.AMBIENT).setValue(v)));
+        r.add(toggle("Авто-приседание (toggle sneak)", () -> c.toggleSneak, v -> c.toggleSneak = v));
+        r.add(toggle("Меньше частиц", () -> c.lowParticles, v -> c.lowParticles = v));
+        r.add(toggle("Скрыть босс-бар", () -> c.hideBossBar, v -> c.hideBossBar = v));
+        r.add(toggle("Скрыть таблицу очков", () -> c.hideScoreboard, v -> c.hideScoreboard = v));
+        r.add(toggle("Время в чате", () -> c.chatTime, v -> c.chatTime = v));
+        r.add(toggle("Скрывать мой ник (стример)", () -> c.nickHider, v -> c.nickHider = v));
+        r.add(toggle("Защита команд", () -> c.cmdProtect, v -> c.cmdProtect = v));
+        r.add(y -> {
+            TextFieldWidget f = new TextFieldWidget(textRenderer, 130, y, 218, 20, Text.literal("Команды"));
+            f.setMaxLength(300);
+            f.setText(c.cmdProtectWords);
+            f.setChangedListener(s -> c.cmdProtectWords = s);
+            addDrawableChild(f);
+        });
+        r.add(toggle("Секундомер на экране", () -> c.stopwatchHud, v -> c.stopwatchHud = v));
+        r.add(button("Секундомер: старт / стоп", HudRenderer::swToggle));
+        r.add(button("Секундомер: сброс", HudRenderer::swReset));
+        r.add(toggle("Время в игре (наиграно)", () -> c.playtimeHud, v -> c.playtimeHud = v));
+        r.add(toggle("Быстрые фразы (клавиша -> чат)", () -> c.quickPhrases, v -> c.quickPhrases = v));
+        for (int i = 0; i < c.phrases.size(); i++) {
+            final int pidx = i;
+            TacticalConfig.Phrase ph = c.phrases.get(i);
+            r.add(y -> {
+                TextFieldWidget f = new TextFieldWidget(textRenderer, 130, y, 120, 20, Text.literal("Фраза"));
+                f.setMaxLength(200);
+                f.setText(ph.text == null ? "" : ph.text);
+                f.setChangedListener(s -> ph.text = s);
+                addDrawableChild(f);
+                addDrawableChild(ButtonWidget.builder(Text.literal(capturingPhrase == pidx ? "..." : keyName(ph.key)), b -> {
+                    capturingPhrase = pidx;
+                    clearAndInit();
+                }).dimensions(254, y, 70, 20).build());
+                addDrawableChild(ButtonWidget.builder(Text.literal("X"), b -> {
+                    c.phrases.remove(pidx);
+                    clearAndInit();
+                }).dimensions(328, y, 20, 20).build());
+            });
+        }
+        r.add(button("+ Добавить фразу", () -> { c.phrases.add(new TacticalConfig.Phrase("", -1)); clearAndInit(); }));
         r.add(toggle("Мини-карта", () -> c.minimapEnabled, v -> c.minimapEnabled = v));
         r.add(toggle("Карта вращается", () -> c.minimapRotate, v -> c.minimapRotate = v));
+        r.add(toggle("Круглая карта", () -> c.minimapCircle, v -> c.minimapCircle = v));
+        r.add(toggle("Мобы на карте", () -> c.minimapMobs, v -> c.minimapMobs = v));
+        r.add(toggle("Буква С (север)", () -> c.minimapNorth, v -> c.minimapNorth = v));
         r.add(toggle("Игроки на карте", () -> c.minimapPlayers, v -> c.minimapPlayers = v));
         r.add(toggle("Метки на карте", () -> c.minimapWaypoints, v -> c.minimapWaypoints = v));
         r.add(toggle("Предсказание движения", () -> c.minimapPredict, v -> c.minimapPredict = v));
@@ -194,12 +286,75 @@ public class TacticalSettingsScreen extends Screen {
             f.setChangedListener(s -> c.chatFilterWords = s);
             addDrawableChild(f);
         });
+        return r;
+    }
+
+    /** Вкладка «Метки»: поставить на своей позиции, по координатам, по клавише; удалить. */
+    private List<IntConsumer> waypointRows(TacticalConfig c) {
+        List<IntConsumer> r = new ArrayList<>();
         r.add(toggle("Метки на экране", () -> c.waypointsHud, v -> c.waypointsHud = v));
+        r.add(toggle("Метки на мини-карте", () -> c.minimapWaypoints, v -> c.minimapWaypoints = v));
         r.add(button("+ Метка на моей позиции", () -> {
             if (client.player == null) return;
             c.waypoints.add(new TacticalConfig.Waypoint("Метка " + (c.waypoints.size() + 1),
-                    (int) client.player.getX(), (int) client.player.getY(), (int) client.player.getZ()));
+                    (int) Math.floor(client.player.getX()), (int) Math.floor(client.player.getY()),
+                    (int) Math.floor(client.player.getZ())));
             clearAndInit();
+        }));
+        r.add(button("Клавиша «метка здесь»: " + (capturingWpKey ? "нажми клавишу..." : keyName(c.waypointKey)), () -> {
+            capturingWpKey = true;
+            clearAndInit();
+        }));
+        // Ввод координат: имя, X, Y, Z. В поле X можно вставить сразу «100 64 -200» или «100, -200».
+        r.add(y -> {
+            TextFieldWidget nf = new TextFieldWidget(textRenderer, 130, y, 70, 20, Text.literal("Имя"));
+            nf.setMaxLength(24);
+            nf.setText(wpName);
+            nf.setChangedListener(s -> wpName = s);
+            addDrawableChild(nf);
+            TextFieldWidget xf = new TextFieldWidget(textRenderer, 204, y, 46, 20, Text.literal("X"));
+            xf.setMaxLength(40);
+            xf.setText(wpX);
+            xf.setChangedListener(s -> wpX = s);
+            addDrawableChild(xf);
+            TextFieldWidget yf = new TextFieldWidget(textRenderer, 254, y, 46, 20, Text.literal("Y"));
+            yf.setMaxLength(8);
+            yf.setText(wpY);
+            yf.setChangedListener(s -> wpY = s);
+            addDrawableChild(yf);
+            TextFieldWidget zf = new TextFieldWidget(textRenderer, 304, y, 44, 20, Text.literal("Z"));
+            zf.setMaxLength(12);
+            zf.setText(wpZ);
+            zf.setChangedListener(s -> wpZ = s);
+            addDrawableChild(zf);
+        });
+        r.add(button("Добавить по координатам (имя, X, Y, Z)", () -> {
+            try {
+                String[] parts = wpX.trim().split("[ ,;]+");
+                int x, yv, z;
+                if (parts.length >= 3) {
+                    x = Integer.parseInt(parts[0]);
+                    yv = Integer.parseInt(parts[1]);
+                    z = Integer.parseInt(parts[2]);
+                } else if (parts.length == 2) {
+                    x = Integer.parseInt(parts[0]);
+                    z = Integer.parseInt(parts[1]);
+                    yv = wpY.trim().isEmpty() ? (client.player != null ? (int) client.player.getY() : 64) : Integer.parseInt(wpY.trim());
+                } else {
+                    x = Integer.parseInt(wpX.trim());
+                    z = Integer.parseInt(wpZ.trim());
+                    yv = wpY.trim().isEmpty() ? (client.player != null ? (int) client.player.getY() : 64) : Integer.parseInt(wpY.trim());
+                }
+                String nm = wpName.trim().isEmpty() ? "Метка " + (c.waypoints.size() + 1) : wpName.trim();
+                c.waypoints.add(new TacticalConfig.Waypoint(nm, x, yv, z));
+                wpName = "";
+                wpX = "";
+                wpY = "";
+                wpZ = "";
+                clearAndInit();
+            } catch (NumberFormatException e) {
+                // нужны целые числа
+            }
         }));
         for (int i = 0; i < c.waypoints.size(); i++) {
             final int idx = i;
@@ -339,6 +494,42 @@ public class TacticalSettingsScreen extends Screen {
 
         // Ожидание клавиши для бинда (опрос GLFW). Backspace очищает бинд.
         TacticalConfig c = TacticalConfig.get();
+        if (capturingPhrase >= 0 && capturingPhrase < c.phrases.size() && client != null) {
+            long pw = client.getWindow().getHandle();
+            for (int k = 32; k <= 348; k++) {
+                if (k == GLFW.GLFW_KEY_ESCAPE) continue;
+                if (GLFW.glfwGetKey(pw, k) == GLFW.GLFW_PRESS) {
+                    c.phrases.get(capturingPhrase).key = (k == GLFW.GLFW_KEY_BACKSPACE) ? -1 : k;
+                    capturingPhrase = -1;
+                    clearAndInit();
+                    break;
+                }
+            }
+        }
+        if (capturingWpKey && client != null) {
+            long ww = client.getWindow().getHandle();
+            for (int k = 32; k <= 348; k++) {
+                if (k == GLFW.GLFW_KEY_ESCAPE) continue;
+                if (GLFW.glfwGetKey(ww, k) == GLFW.GLFW_PRESS) {
+                    c.waypointKey = (k == GLFW.GLFW_KEY_BACKSPACE) ? -1 : k;
+                    capturingWpKey = false;
+                    clearAndInit();
+                    break;
+                }
+            }
+        }
+        if (capturingFreelook && client != null) {
+            long fw = client.getWindow().getHandle();
+            for (int k = 32; k <= 348; k++) {
+                if (k == GLFW.GLFW_KEY_ESCAPE) continue;
+                if (GLFW.glfwGetKey(fw, k) == GLFW.GLFW_PRESS) {
+                    c.freelookKey = (k == GLFW.GLFW_KEY_BACKSPACE) ? -1 : k;
+                    capturingFreelook = false;
+                    clearAndInit();
+                    break;
+                }
+            }
+        }
         if (capturingRadial && client != null) {
             long win = client.getWindow().getHandle();
             for (int k = 32; k <= 348; k++) {

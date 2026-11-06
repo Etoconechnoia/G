@@ -97,6 +97,51 @@ public class TacticalConfig {
     public float predictSeconds = 2f;   // 1..5
     public float minimapScale = 3f;     // пикселей на клетку (1..4)
     public float minimapRange = 24f;    // радиус в блоках
+    public boolean minimapCircle = true;
+    public boolean minimapMobs = false;
+    public boolean minimapNorth = true;
+    public boolean enemyPredict = false;
+    public float enemyPredictSec = 0.5f; // 0.2..1.5
+    public boolean modePanel = false;
+    public int pvpMode = 0;
+    public boolean toggleSprint = false;
+    public boolean effectsAll = false;
+    public boolean infoServer = false;
+    public boolean infoRam = false;
+    public boolean miniLight = false;
+    public boolean miniChunkInfo = false;
+    public boolean miniFacingInfo = false;
+    public boolean miniBlockInfo = false;
+    public boolean miniDimInfo = false;
+    public boolean miniEntInfo = false;
+    public boolean hitSound = false;
+    public boolean killSound = false;
+    public boolean killFlash = false;
+    public boolean totemFlash = false;
+    public boolean hitCross = false;
+    public boolean toggleSneak = false;
+    public boolean lowParticles = false;
+    public boolean hideBossBar = false;
+    public boolean hideScoreboard = false;
+    public boolean chatTime = false;
+    public boolean nickHider = false;
+    public boolean cmdProtect = false;
+    public String cmdProtectWords = "kill,op,deop,stop,ban,pardon,gamemode,give";
+    public boolean stopwatchHud = false;
+    public boolean playtimeHud = false;
+    public long playtimeSec = 0;
+    public boolean damageTint = false;
+    public boolean oofSound = false;
+    public boolean tntCountdown = false;
+    public boolean quickPhrases = false;
+    public boolean noBob = false;
+    public boolean weatherClear = false;
+    public boolean menuBlurOff = false;
+    public boolean cooldownsHud = false;
+    public boolean freelookEnabled = false;
+    public int waypointKey = -1; // клавиша «метка здесь»
+    public int freelookKey = 342; // левый Alt
+    public List<Phrase> phrases = new ArrayList<>();
 
     // ---------- Прочее ----------
     public boolean zoomEnabled = true;
@@ -130,6 +175,12 @@ public class TacticalConfig {
         public String name;
         public int x, y, z;
         public Waypoint(String name, int x, int y, int z) { this.name = name; this.x = x; this.y = y; this.z = z; }
+    }
+
+    public static class Phrase {
+        public String text;
+        public int key;
+        public Phrase(String text, int key) { this.text = text; this.key = key; }
     }
 
     /** Пресеты HUD: 0 = минимум, 1 = PvP, 2 = всё. */
@@ -185,6 +236,25 @@ public class TacticalConfig {
         statsPanel = all;
         killFeed = mid;
         minimapEnabled = mid;
+        modePanel = mid;
+        effectsAll = all;
+        infoServer = all;
+        infoRam = all;
+        miniLight = all;
+        miniChunkInfo = all;
+        miniFacingInfo = all;
+        miniBlockInfo = all;
+        miniDimInfo = all;
+        miniEntInfo = all;
+        hitSound = mid;
+        killSound = mid;
+        killFlash = mid;
+        totemFlash = mid;
+        hitCross = mid;
+        damageTint = mid;
+        tntCountdown = mid;
+        stopwatchHud = all;
+        playtimeHud = all;
     }
 
     public static boolean[] defaultPixels() {
@@ -230,6 +300,8 @@ public class TacticalConfig {
         }
         if (instance == null) instance = new TacticalConfig();
         if (instance.binds == null) instance.binds = new ArrayList<>();
+        if (instance.phrases == null) instance.phrases = new ArrayList<>();
+        if (instance.cmdProtectWords == null) instance.cmdProtectWords = "";
         if (instance.waypoints == null) instance.waypoints = new ArrayList<>();
         if (instance.pixels == null || instance.pixels.length != PIX * PIX) instance.pixels = defaultPixels();
         if (instance.chatFilterWords == null) instance.chatFilterWords = "";

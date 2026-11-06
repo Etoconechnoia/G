@@ -11,7 +11,7 @@
     "main": ["com.tacticalpvphud.TacticalPvPHUD"],
     "client": ["com.tacticalpvphud.client.TacticalPvPHUDClient"]
   },
-  "mixins": ["tacticalpvphud.mixins.json"],
+  "mixins": ["tacticalpvphud.mixins.json", "tacticalpvphud.freelook.mixins.json"],
   "depends": {
     "fabricloader": ">=0.18.0",
     "minecraft": "~1.21.11",
